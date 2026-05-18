@@ -5,6 +5,9 @@ pub enum TraydBinError {
     #[error(transparent)]
     Host(#[from] libtrayd::TraydError),
 
-    #[error("IPC is not implemented yet (see docs/IPC.md Phase 1)")]
-    IpcNotReady,
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
+
+    #[error(transparent)]
+    Ipc(#[from] crate::ipc::IpcError),
 }

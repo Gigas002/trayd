@@ -9,12 +9,17 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    /// Run the tray daemon (default).
+    /// Run the tray daemon (default when no subcommand is given).
     Run,
-    /// Check daemon reachability over IPC.
+    /// Check that the daemon is reachable and print its version.
     Ping,
-    /// List tray items (machine-readable when implemented).
+    /// List all registered tray items.
     List,
+    /// Send a primary-click activation to a tray item.
+    Activate {
+        /// Stable item id (D-Bus service name).
+        id: String,
+    },
 }
 
 #[cfg(test)]

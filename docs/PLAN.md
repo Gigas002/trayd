@@ -50,12 +50,12 @@ Tray support in minimal bars (`ashell`, `waybar`, **abar**) is hard to keep **sm
 
 [`ABAR_PLAN.md`](ABAR_PLAN.md) Phase 7 originally described an in-process **`libabar` `tray` feature** with `zbus`. With trayd, **abar’s tray module becomes an IPC client**:
 
-| Layer | Responsibility |
-| ----- | -------------- |
-| **trayd** daemon (`trayd` crate) | Runs `libtrayd` host + **IPC server**; **CLI** for all consumers |
-| **libtrayd** | D-Bus SNI/menu host only — **no** IPC, **no** CLI |
-| **abar `libabar` tray** | Poll/subscribe IPC → segments + pixmaps → Cairo paint; spawn `launcher` on click |
-| **User launcher** | dmenu line protocol or terminal + `trayd-client` |
+| Layer                            | Responsibility                                                                   |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| **trayd** daemon (`trayd` crate) | Runs `libtrayd` host + **IPC server**; **CLI** for all consumers                 |
+| **libtrayd**                     | D-Bus SNI/menu host only — **no** IPC, **no** CLI                                |
+| **abar `libabar` tray**          | Poll/subscribe IPC → segments + pixmaps → Cairo paint; spawn `launcher` on click |
+| **User launcher**                | dmenu line protocol or terminal + `trayd-client`                                 |
 
 abar keeps compile-time `tray` feature for **wiring only** (IPC client + render), not for hosting D-Bus.
 
@@ -138,11 +138,11 @@ trayd/                           # workspace root
 
 Same split as **`libabar` / `abar`**: library holds protocol/domain logic; the **`trayd`** crate holds everything external consumers touch.
 
-| Crate | Responsibility | Allowed deps | Forbidden |
-| ----- | -------------- | ------------ | --------- |
-| **libtrayd** | `TrayHost`, SNI/DBusMenu, item/menu/pixmap **in-process API** | `zbus`, `tokio`, `tracing`, `thiserror` (add `serde` only if host types need it for tests) | **IPC** (socket, NDJSON, wire types), **clap**, **toml**, **ratatui**, `println!` / `eprintln!` — use `tracing` |
-| **trayd** | **IPC server**, **CLI**, daemon loop, config; wires `libtrayd::TrayHost` → socket | `libtrayd`, `clap`, `toml`, `serde`, `serde_json`, `tracing-subscriber`, `tokio` | Reimplementing D-Bus tray protocol outside `libtrayd` |
-| **trayd-client** | ratatui TUI; **IPC socket client** (own wire types per `docs/IPC.md`) | `ratatui`, `crossterm`, `tokio`, `serde`, `serde_json` | **`libtrayd`**, **`trayd` crate**, D-Bus, IPC **server** |
+| Crate            | Responsibility                                                                    | Allowed deps                                                                               | Forbidden                                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| **libtrayd**     | `TrayHost`, SNI/DBusMenu, item/menu/pixmap **in-process API**                     | `zbus`, `tokio`, `tracing`, `thiserror` (add `serde` only if host types need it for tests) | **IPC** (socket, NDJSON, wire types), **clap**, **toml**, **ratatui**, `println!` / `eprintln!` — use `tracing` |
+| **trayd**        | **IPC server**, **CLI**, daemon loop, config; wires `libtrayd::TrayHost` → socket | `libtrayd`, `clap`, `toml`, `serde`, `serde_json`, `tracing-subscriber`, `tokio`           | Reimplementing D-Bus tray protocol outside `libtrayd`                                                           |
+| **trayd-client** | ratatui TUI; **IPC socket client** (own wire types per `docs/IPC.md`)             | `ratatui`, `crossterm`, `tokio`, `serde`, `serde_json`                                     | **`libtrayd`**, **`trayd` crate**, D-Bus, IPC **server**                                                        |
 
 **`trayd` package:** **`[[bin]]` only** — `ipc/`, `cli/`, `daemon/` are private modules of the daemon binary (same crate, not a published library).
 
@@ -164,18 +164,18 @@ Document fully in `docs/IPC.md` in Phase 1; keep `examples/ipc-examples/*.json` 
 
 ### 3.2 Methods (v1 minimum)
 
-| Method | Purpose | Typical caller |
-| ------ | ------- | -------------- |
-| `ping` | health / version | systemd, abar startup |
-| `list` | all items: id, title, status, attention icon flag | abar render loop, CLI |
-| `subscribe` | long-lived stream of `item_added`, `item_removed`, `item_updated`, `menu_changed` | abar (after initial `list`) |
-| `get_pixmap` | `{ item_id, size }` → PNG or raw ARGB + dimensions | abar icon cache |
-| `activate` | primary activation (button 1) | abar click, CLI |
-| `secondary_activate` | middle click where supported | abar |
-| `scroll` | `{ item_id, direction, delta }` | abar scroll binding |
-| `menu_open` | returns flat or tree snapshot for item | dmenu / trayd-client entry |
-| `menu_select` | `{ session_id, node_id }` → may return nested `menu_open` payload for submenu | dmenu respawn, trayd-client |
-| `menu_close` | end session | launcher exit |
+| Method               | Purpose                                                                           | Typical caller              |
+| -------------------- | --------------------------------------------------------------------------------- | --------------------------- |
+| `ping`               | health / version                                                                  | systemd, abar startup       |
+| `list`               | all items: id, title, status, attention icon flag                                 | abar render loop, CLI       |
+| `subscribe`          | long-lived stream of `item_added`, `item_removed`, `item_updated`, `menu_changed` | abar (after initial `list`) |
+| `get_pixmap`         | `{ item_id, size }` → PNG or raw ARGB + dimensions                                | abar icon cache             |
+| `activate`           | primary activation (button 1)                                                     | abar click, CLI             |
+| `secondary_activate` | middle click where supported                                                      | abar                        |
+| `scroll`             | `{ item_id, direction, delta }`                                                   | abar scroll binding         |
+| `menu_open`          | returns flat or tree snapshot for item                                            | dmenu / trayd-client entry  |
+| `menu_select`        | `{ session_id, node_id }` → may return nested `menu_open` payload for submenu     | dmenu respawn, trayd-client |
+| `menu_close`         | end session                                                                       | launcher exit               |
 
 **Errors:** `{ "v":1, "error": { "code": "…", "message": "…" } }` — stable `code` enum (`NOT_FOUND`, `BUS_FAILED`, `INVALID_SESSION`, …).
 
@@ -206,7 +206,7 @@ Per [issue #7](https://github.com/Gigas002/abar/issues/7): avoids version lock-i
 
 - Register **org.kde.StatusNotifierWatcher** (or freedesktop equivalent used by target apps).
 - Track **StatusNotifierItem** instances on the session bus.
-- For each item: properties (IconName, IconPixmap, Attention*, ToolTip, Category, Status), **`Activate`**, **`SecondaryActivate`**, **`Scroll`**.
+- For each item: properties (IconName, IconPixmap, Attention\*, ToolTip, Category, Status), **`Activate`**, **`SecondaryActivate`**, **`Scroll`**.
 - **DBusMenu** (`com.canonical.dbusmenu`): layout + property updates; expose as **`MenuNode` tree** in `libtrayd::model` with stable `node_id` (mapped to IPC ids in **`trayd::ipc`**, not in libtrayd).
 
 ### 4.2 Implementation notes
@@ -232,14 +232,14 @@ Per [issue #7](https://github.com/Gigas002/abar/issues/7): avoids version lock-i
 
 **Subcommands (v1):**
 
-| Command | Role |
-| ------- | ---- |
-| `trayd` / `trayd run` | Start D-Bus host + IPC server |
-| `trayd ping` | IPC health |
-| `trayd list` | Human or `--json` machine output |
-| `trayd activate <id>` | Scripting |
-| `trayd menu-dmenu …` | Pipe-friendly menu for launchers |
-| `trayd subscribe` | Debug stream (optional) |
+| Command               | Role                             |
+| --------------------- | -------------------------------- |
+| `trayd` / `trayd run` | Start D-Bus host + IPC server    |
+| `trayd ping`          | IPC health                       |
+| `trayd list`          | Human or `--json` machine output |
+| `trayd activate <id>` | Scripting                        |
+| `trayd menu-dmenu …`  | Pipe-friendly menu for launchers |
+| `trayd subscribe`     | Debug stream (optional)          |
 
 **Config (`examples/trayd.toml`):** socket path, `RUST_LOG` default, optional max items (future).
 
@@ -280,11 +280,11 @@ launcher = "tofi --dmenu"
 style = "icons"
 ```
 
-| `style` | abar behavior |
-| ------- | ------------- |
-| `icons` | One segment per tray item; pixmap from `get_pixmap`; click → `activate` or menu via launcher |
-| `submenu` | Single “tray” segment; click opens launcher listing items |
-| `simple` | Label `tray: N`; click opens launcher |
+| `style`   | abar behavior                                                                                |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `icons`   | One segment per tray item; pixmap from `get_pixmap`; click → `activate` or menu via launcher |
+| `submenu` | Single “tray” segment; click opens launcher listing items                                    |
+| `simple`  | Label `tray: N`; click opens launcher                                                        |
 
 ### 6.2 abar runtime flow
 
@@ -335,10 +335,10 @@ When a phase is marked complete:
 
 ### Phase 1 — IPC protocol + skeleton (**trayd** crate only)
 
-- [ ] `trayd::ipc::protocol` wire types (v1 methods in §3.2); map to/from `libtrayd` types at the daemon boundary only.
-- [ ] NDJSON codec + Unix socket **server** + **client** under `trayd/src/ipc/`.
-- [ ] `trayd ping` / `trayd list` against a **mock** `TrayHost` (test double in `trayd` tests, not D-Bus).
-- [ ] Golden tests from `examples/ipc-examples/`.
+- [x] `trayd::ipc::protocol` wire types (v1 methods in §3.2); map to/from `libtrayd` types at the daemon boundary only.
+- [x] NDJSON codec + Unix socket **server** + **client** under `trayd/src/ipc/`.
+- [x] `trayd ping` / `trayd list` against a **mock** `TrayHost` (test double in `trayd` tests, not D-Bus).
+- [x] Golden tests from `examples/ipc-examples/`.
 
 **Verify:** unit tests in `trayd/src/ipc/tests.rs`; integration test with temp socket; `docs/IPC.md` complete. **libtrayd** may still be empty or stub.
 
@@ -430,9 +430,10 @@ Update this plan when:
 
 ## Revision history
 
-| Date | Change |
-| ---- | ------ |
-| 2026-05-18 | Initial trayd plan: confirmed abar #7; three crates; IPC-first; abar consumer spec; phased roadmap |
-| 2026-05-18 | IPC + CLI live in **trayd** crate; **libtrayd** = D-Bus host only (abar/libabar split) |
-| 2026-05-18 | **trayd-client** (and all consumers) use socket/CLI only — no link to `trayd` or `libtrayd` crates |
-| 2026-05-18 | **Phase 0** done: three crates scaffolded, CI without Cairo, `deny.toml` populated |
+| Date       | Change                                                                                                                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-05-18 | Initial trayd plan: confirmed abar #7; three crates; IPC-first; abar consumer spec; phased roadmap                                                                     |
+| 2026-05-18 | IPC + CLI live in **trayd** crate; **libtrayd** = D-Bus host only (abar/libabar split)                                                                                 |
+| 2026-05-18 | **trayd-client** (and all consumers) use socket/CLI only — no link to `trayd` or `libtrayd` crates                                                                     |
+| 2026-05-18 | **Phase 0** done: three crates scaffolded, CI without Cairo, `deny.toml` populated                                                                                     |
+| 2026-05-18 | **Phase 1** done: IPC protocol wire types, NDJSON codec, Unix-socket server+client, `StubHandler`, `trayd ping/list/activate`, golden fixtures, `docs/IPC.md` complete |
