@@ -10,3 +10,14 @@ description = "Minimalistic wayland-native tray daemon/wrapper around dbus (`zbu
 keywords = ["tray", "dbus", "zbus"]
 repository = "https://github.com/Gigas002/trayd"
 version = "0.1.0"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+libtrayd = { path = "libtrayd" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

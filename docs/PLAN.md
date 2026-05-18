@@ -325,11 +325,11 @@ When a phase is marked complete:
 
 ### Phase 0 — Workspace scaffold + hygiene
 
-- [ ] Create `libtrayd`, `trayd`, `trayd-client` crates matching §2 (empty `lib.rs`, `pub fn stub()` if needed for CI).
-- [ ] Wire workspace `version`, `edition = "2024"`, shared `license`, `repository`.
-- [ ] Populate **`deny.toml`** allow list incrementally.
-- [ ] `tracing-subscriber` in **`trayd`** / **`trayd-client`** binaries only; **`libtrayd`** uses `tracing` macros only.
-- [ ] Add `docs/IPC.md` stub pointing to Phase 1.
+- [x] Create `libtrayd`, `trayd`, `trayd-client` crates matching §2 (empty `lib.rs`, `pub fn stub()` if needed for CI).
+- [x] Wire workspace `version`, `edition = "2024"`, shared `license`, `repository`.
+- [x] Populate **`deny.toml`** allow list incrementally.
+- [x] `tracing-subscriber` in **`trayd`** / **`trayd-client`** binaries only; **`libtrayd`** uses `tracing` macros only.
+- [x] Add `docs/IPC.md` stub pointing to Phase 1.
 
 **Verify:** all §7 gates green on empty crates; `cargo build -p trayd -p trayd-client -p libtrayd`.
 
@@ -435,3 +435,4 @@ Update this plan when:
 | 2026-05-18 | Initial trayd plan: confirmed abar #7; three crates; IPC-first; abar consumer spec; phased roadmap |
 | 2026-05-18 | IPC + CLI live in **trayd** crate; **libtrayd** = D-Bus host only (abar/libabar split) |
 | 2026-05-18 | **trayd-client** (and all consumers) use socket/CLI only — no link to `trayd` or `libtrayd` crates |
+| 2026-05-18 | **Phase 0** done: three crates scaffolded, CI without Cairo, `deny.toml` populated |

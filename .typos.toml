@@ -1,1 +1,5 @@
 [default.extend-words]
+ratatui = "ratatui"
+
+[files]
+extend-exclude = ["abar/", "target/"]

@@ -1,0 +1,4 @@
+# trayd daemon config (optional, Phase 2+)
+# Default socket: $XDG_RUNTIME_DIR/trayd.sock
+
+# socket = "/run/user/1000/trayd.sock"

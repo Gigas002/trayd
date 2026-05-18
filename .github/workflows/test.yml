@@ -19,11 +19,6 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - name: Install Cairo/Pango (build deps)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpango1.0-dev libcairo2-dev libxkbcommon-dev
-
       - name: Build cache
         uses: Swatinem/rust-cache@v2
 
