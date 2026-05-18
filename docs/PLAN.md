@@ -344,10 +344,10 @@ When a phase is marked complete:
 
 ### Phase 2 — D-Bus SNI host (**libtrayd**) + daemon wiring (**trayd**)
 
-- [ ] `libtrayd::dbus/` watcher + item registration lifecycle.
-- [ ] `libtrayd::TrayHost`: list, pixmap, activate, scroll, host event stream.
-- [ ] `trayd::daemon`: run `TrayHost` + `ipc::Server`; single-instance socket policy.
-- [ ] `trayd` CLI: `list`, `activate`, `subscribe` via `ipc::Client`.
+- [x] `libtrayd::dbus/` watcher + item registration lifecycle.
+- [x] `libtrayd::TrayHost`: list, pixmap, activate, scroll, host event stream.
+- [x] `trayd::daemon`: run `TrayHost` + `ipc::Server`; single-instance socket policy.
+- [x] `trayd` CLI: `list`, `activate`, `subscribe` via `ipc::Client`.
 
 **Verify:** manual with `nm-applet`, `blueman`, or `telegram` tray; document apps used; CI ignores live bus or uses test bus if feasible.
 
@@ -437,3 +437,4 @@ Update this plan when:
 | 2026-05-18 | **trayd-client** (and all consumers) use socket/CLI only — no link to `trayd` or `libtrayd` crates                                                                     |
 | 2026-05-18 | **Phase 0** done: three crates scaffolded, CI without Cairo, `deny.toml` populated                                                                                     |
 | 2026-05-18 | **Phase 1** done: IPC protocol wire types, NDJSON codec, Unix-socket server+client, `StubHandler`, `trayd ping/list/activate`, golden fixtures, `docs/IPC.md` complete |
+| 2026-05-18 | **Phase 2** done: `libtrayd` SNI watcher + item proxy (`zbus`), `TrayHost` (list/pixmap/activate/scroll/subscribe), `Handler` trait async, `TrayHostHandler`, daemon D-Bus wiring with stub fallback, single-instance check, `trayd subscribe` CLI |

@@ -28,15 +28,14 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), TraydBinError> {
     match cli.command.unwrap_or(Command::Run) {
-        // The daemon resolves the socket path itself (and installs Ctrl+C).
         Command::Run => daemon::run().await,
-        // CLI subcommands need the socket path to connect to the daemon.
         cmd => {
             let socket_path = config::default_socket_path()?;
             match cmd {
                 Command::Ping => ipc::ping(&socket_path).await,
                 Command::List => ipc::list(&socket_path).await,
                 Command::Activate { id } => ipc::activate(&socket_path, id).await,
+                Command::Subscribe => ipc::subscribe(&socket_path).await,
                 Command::Run => unreachable!(),
             }
         }

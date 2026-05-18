@@ -1,8 +1,7 @@
-//! IPC unit and integration tests (Phase 1).
+//! IPC unit and integration tests.
 //!
-//! Unit tests cover codec round-trips and protocol serialization.
-//! Integration tests spin up a real [`server::Server`] bound to a
-//! temp Unix socket and connect a [`client::Client`] to it.
+//! Codec and protocol tests are synchronous.  Handler and integration tests
+//! use `#[tokio::test]` because the `Handler` trait is now async.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,13 +17,11 @@ use super::server::{Handler, Server, StubHandler};
 
 static TEST_SOCKET_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-/// Unique temp socket path for each test.
 fn test_socket_path() -> PathBuf {
     let id = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::SeqCst);
     PathBuf::from(format!("/tmp/trayd-test-{}-{id}.sock", std::process::id()))
 }
 
-/// Spawn a server with the given handler, return the shutdown sender.
 async fn spawn_server(path: PathBuf, handler: StubHandler) -> tokio::sync::watch::Sender<bool> {
     let server = Server::bind(&path).expect("bind");
     let handler = Arc::new(handler);
@@ -32,7 +29,6 @@ async fn spawn_server(path: PathBuf, handler: StubHandler) -> tokio::sync::watch
     tokio::spawn(async move {
         server.run(handler, rx).await.ok();
     });
-    // Give the server a moment to start accepting.
     tokio::time::sleep(Duration::from_millis(5)).await;
     tx
 }
@@ -147,7 +143,6 @@ fn golden_ping_response() {
     let json = fixture("ping-response.json");
     let resp: Response = decode(json.trim()).unwrap();
     assert_eq!(resp.v, 1);
-    assert!(resp.result.is_some());
     assert!(matches!(resp.result, Some(ResultPayload::Pong { .. })));
 }
 
@@ -229,39 +224,43 @@ fn golden_event_item_removed() {
     ));
 }
 
-// ── StubHandler unit tests ────────────────────────────────────────────────────
+// ── StubHandler unit tests (async — Handler::handle is now async) ─────────────
 
-#[test]
-fn stub_handler_ping() {
+#[tokio::test]
+async fn stub_handler_ping() {
     let h = StubHandler::new();
-    let resp = h.handle(&Method::Ping);
+    let resp = h.handle(&Method::Ping).await;
     assert!(matches!(resp.result, Some(ResultPayload::Pong { .. })));
 }
 
-#[test]
-fn stub_handler_list_empty() {
+#[tokio::test]
+async fn stub_handler_list_empty() {
     let h = StubHandler::new();
-    let resp = h.handle(&Method::List);
+    let resp = h.handle(&Method::List).await;
     assert!(matches!(resp.result, Some(ResultPayload::List { ref items }) if items.is_empty()));
 }
 
-#[test]
-fn stub_handler_activate_not_found() {
+#[tokio::test]
+async fn stub_handler_activate_not_found() {
     let h = StubHandler::new();
-    let resp = h.handle(&Method::Activate {
-        item_id: "missing".to_owned(),
-    });
+    let resp = h
+        .handle(&Method::Activate {
+            item_id: "missing".to_owned(),
+        })
+        .await;
     assert!(resp.error.is_some());
     assert_eq!(resp.error.unwrap().code, ErrorCode::NotFound);
 }
 
-#[test]
-fn stub_handler_activate_found() {
+#[tokio::test]
+async fn stub_handler_activate_found() {
     let item = StubHandler::mock_item("app");
     let h = StubHandler::new().with_items(vec![item]);
-    let resp = h.handle(&Method::Activate {
-        item_id: "app".to_owned(),
-    });
+    let resp = h
+        .handle(&Method::Activate {
+            item_id: "app".to_owned(),
+        })
+        .await;
     assert!(matches!(resp.result, Some(ResultPayload::Ok)));
 }
 
@@ -339,11 +338,9 @@ async fn integration_multiple_requests_on_same_connection() {
 
     let mut client = Client::connect(&path).await.expect("connect");
 
-    // Ping
     let r1 = client.send(Method::Ping).await.expect("ping");
     assert!(r1.result.is_some());
 
-    // List
     let r2 = client.send(Method::List).await.expect("list");
     assert!(r2.result.is_some());
 
@@ -364,7 +361,6 @@ async fn integration_invalid_protocol_version() {
     let mut reader = FramedReader::new(r);
     let mut writer = FramedWriter::new(w);
 
-    // Send a request with the wrong version.
     let bad = serde_json::json!({"v": 99, "method": "ping"});
     writer.write_frame(&bad).await.expect("write");
 
@@ -391,7 +387,6 @@ async fn integration_subscribe_receives_event() {
     });
     tokio::time::sleep(Duration::from_millis(5)).await;
 
-    // Connect and subscribe.
     let stream = UnixStream::connect(&path).await.expect("connect");
     let (r, w) = stream.into_split();
     let mut reader = FramedReader::new(r);
@@ -402,7 +397,6 @@ async fn integration_subscribe_receives_event() {
         .await
         .expect("write subscribe");
 
-    // Receive the "subscribed" ack.
     let ack: Response = reader
         .read_frame()
         .await
@@ -410,13 +404,11 @@ async fn integration_subscribe_receives_event() {
         .expect("ack frame");
     assert!(matches!(ack.result, Some(ResultPayload::Subscribed)));
 
-    // Emit an event from another task.
     tokio::time::sleep(Duration::from_millis(5)).await;
     handler.emit(HostEvent::ItemRemoved {
         id: "org.kde.plasma.nm".to_owned(),
     });
 
-    // Read the event (with a timeout so the test doesn't hang).
     let env: EventEnvelope = tokio::time::timeout(Duration::from_millis(200), async {
         reader
             .read_frame()

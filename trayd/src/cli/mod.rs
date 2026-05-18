@@ -17,9 +17,11 @@ pub enum Command {
     List,
     /// Send a primary-click activation to a tray item.
     Activate {
-        /// Stable item id (D-Bus service name).
+        /// Stable item id (D-Bus service name + object path).
         id: String,
     },
+    /// Stream tray events to stdout (one JSON object per line).
+    Subscribe,
 }
 
 #[cfg(test)]

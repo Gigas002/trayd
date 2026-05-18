@@ -10,4 +10,7 @@ pub enum TraydBinError {
 
     #[error(transparent)]
     Ipc(#[from] crate::ipc::IpcError),
+
+    #[error("another trayd instance is already running at {socket}")]
+    AlreadyRunning { socket: String },
 }

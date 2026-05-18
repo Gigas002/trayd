@@ -6,8 +6,9 @@
 //! - [`server`]   — [`server::Server`] + [`server::Handler`] trait + [`server::StubHandler`]
 //! - [`client`]   — [`client::Client`] for CLI subcommands
 //!
-//! **CLI entry points** (`ping`, `list`, `activate`) live here; they are thin
-//! wrappers that open a [`client::Client`], send a request, and format output.
+//! **CLI entry points** (`ping`, `list`, `activate`, `subscribe`) live here;
+//! they open a [`client::Client`] (or raw framed socket for `subscribe`),
+//! send a request, and format output.
 
 pub mod client;
 pub mod codec;
@@ -23,7 +24,6 @@ use protocol::{ErrorCode, Method, ResultPayload};
 
 // ── IPC error ─────────────────────────────────────────────────────────────────
 
-/// Errors that can occur in the IPC layer (both server and client side).
 #[derive(Debug, Error)]
 pub enum IpcError {
     #[error("I/O: {0}")]
@@ -109,6 +109,73 @@ pub async fn activate(socket_path: &Path, item_id: String) -> Result<(), TraydBi
         }
         .into()),
     }
+}
+
+/// `trayd subscribe` — stream tray events to stdout until Ctrl+C.
+pub async fn subscribe(socket_path: &Path) -> Result<(), TraydBinError> {
+    use codec::{FramedReader, FramedWriter};
+    use protocol::{EventEnvelope, RequestEnvelope, Response};
+    use tokio::net::UnixStream;
+
+    let stream = UnixStream::connect(socket_path).await.map_err(|e| {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+        ) {
+            IpcError::NotRunning {
+                path: socket_path.display().to_string(),
+            }
+        } else {
+            IpcError::Io(e)
+        }
+    })?;
+
+    let (r, w) = stream.into_split();
+    let mut reader = FramedReader::new(r);
+    let mut writer = FramedWriter::new(w);
+
+    writer
+        .write_frame(&RequestEnvelope::new(Method::Subscribe))
+        .await?;
+
+    // Read and verify the subscribed ack.
+    match reader.read_frame::<Response>().await? {
+        None => return Err(IpcError::UnexpectedEof.into()),
+        Some(resp) => match resp.into_result() {
+            Ok(ResultPayload::Subscribed) => {}
+            Ok(other) => tracing::warn!(?other, "unexpected subscribe ack payload"),
+            Err(err) => {
+                return Err(IpcError::Remote {
+                    code: err.code,
+                    message: err.message,
+                }
+                .into());
+            }
+        },
+    }
+
+    eprintln!("subscribed — streaming events (Ctrl+C to stop)");
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = tokio::signal::ctrl_c() => { break; }
+            frame = reader.read_frame::<EventEnvelope>() => {
+                match frame? {
+                    None => break,
+                    Some(env) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&env.event)
+                                .map_err(IpcError::Json)?
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

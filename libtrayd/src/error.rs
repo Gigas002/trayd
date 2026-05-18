@@ -2,6 +2,18 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TraydError {
-    #[error("tray host is not implemented yet")]
-    NotImplemented,
+    #[error("D-Bus error: {0}")]
+    DBus(#[from] zbus::Error),
+
+    #[error("D-Bus FDO error: {0}")]
+    Fdo(#[from] zbus::fdo::Error),
+
+    #[error("item not found: {0}")]
+    NotFound(String),
+
+    #[error("no pixmap available for item {0}")]
+    NoPixmap(String),
+
+    #[error("tray host error: {0}")]
+    Internal(String),
 }
