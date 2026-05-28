@@ -353,7 +353,7 @@ When a phase is marked complete:
 
 ### Phase 2 — D-Bus SNI host (**libtrayd**) + daemon wiring
 
-- [ ] `libtrayd::dbus/` + `TrayHost` (items, pixmaps, activate, events).
+- [x] `libtrayd::dbus/` + `TrayHost` (items, pixmaps, activate, events).
 - [ ] `trayd run`: real host + IPC server; single-instance policy.
 - [ ] `trayd ping` over live socket.
 
