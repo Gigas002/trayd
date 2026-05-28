@@ -427,3 +427,212 @@ async fn integration_subscribe_receives_event() {
     tx.send(true).ok();
     let _ = std::fs::remove_file(&path);
 }
+
+// ── Phase 3: menu codec roundtrips ────────────────────────────────────────────
+
+#[test]
+fn codec_roundtrip_menu_open() {
+    let req = RequestEnvelope::new(Method::MenuOpen {
+        item_id: "org.kde.plasma.nm".to_owned(),
+        parent_id: 0,
+    });
+    let bytes = encode(&req).unwrap();
+    let decoded: RequestEnvelope = decode(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert_eq!(req, decoded);
+}
+
+#[test]
+fn codec_roundtrip_menu_select() {
+    let req = RequestEnvelope::new(Method::MenuSelect {
+        session_id: "s-1".to_owned(),
+        node_id: "42".to_owned(),
+    });
+    let bytes = encode(&req).unwrap();
+    let decoded: RequestEnvelope = decode(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert_eq!(req, decoded);
+}
+
+#[test]
+fn codec_roundtrip_menu_close() {
+    let req = RequestEnvelope::new(Method::MenuClose {
+        session_id: "s-1".to_owned(),
+    });
+    let bytes = encode(&req).unwrap();
+    let decoded: RequestEnvelope = decode(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert_eq!(req, decoded);
+}
+
+#[test]
+fn codec_roundtrip_menu_opened_result() {
+    let session = MenuSession {
+        session_id: "s-1".to_owned(),
+        item_id: "org.kde.plasma.nm".to_owned(),
+        nodes: vec![
+            MenuNodeInfo {
+                id: "1".to_owned(),
+                label: Some("Enable Networking".to_owned()),
+                enabled: true,
+                visible: true,
+                is_separator: false,
+                children_display: None,
+            },
+            MenuNodeInfo {
+                id: "2".to_owned(),
+                label: Some("VPN".to_owned()),
+                enabled: true,
+                visible: true,
+                is_separator: false,
+                children_display: Some("submenu".to_owned()),
+            },
+        ],
+    };
+    let resp = Response::ok(ResultPayload::MenuOpened(session));
+    let bytes = encode(&resp).unwrap();
+    let decoded: Response = decode(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert_eq!(resp, decoded);
+    assert!(matches!(decoded.result, Some(ResultPayload::MenuOpened(_))));
+}
+
+#[test]
+fn codec_roundtrip_menu_changed_event() {
+    let ev = EventEnvelope::new(HostEvent::MenuChanged {
+        item_id: "org.kde.plasma.nm".to_owned(),
+    });
+    let bytes = encode(&ev).unwrap();
+    let decoded: EventEnvelope = decode(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert_eq!(ev, decoded);
+    assert!(matches!(decoded.event, HostEvent::MenuChanged { .. }));
+}
+
+// ── Phase 3: StubHandler menu tests ──────────────────────────────────────────
+
+#[tokio::test]
+async fn stub_menu_open_not_found() {
+    let h = StubHandler::new();
+    let resp = h
+        .handle(&Method::MenuOpen {
+            item_id: "missing".to_owned(),
+            parent_id: 0,
+        })
+        .await;
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.unwrap().code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn stub_menu_open_found() {
+    let item = StubHandler::mock_item("app");
+    let h = StubHandler::new().with_items(vec![item]);
+    let resp = h
+        .handle(&Method::MenuOpen {
+            item_id: "app".to_owned(),
+            parent_id: 0,
+        })
+        .await;
+    assert!(resp.error.is_none());
+    assert!(matches!(resp.result, Some(ResultPayload::MenuOpened(_))));
+}
+
+#[tokio::test]
+async fn stub_menu_select_invalid_session() {
+    let h = StubHandler::new();
+    let resp = h
+        .handle(&Method::MenuSelect {
+            session_id: "no-such".to_owned(),
+            node_id: "1".to_owned(),
+        })
+        .await;
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.unwrap().code, ErrorCode::InvalidSession);
+}
+
+#[tokio::test]
+async fn stub_menu_close_invalid_session() {
+    let h = StubHandler::new();
+    let resp = h
+        .handle(&Method::MenuClose {
+            session_id: "no-such".to_owned(),
+        })
+        .await;
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.unwrap().code, ErrorCode::InvalidSession);
+}
+
+// ── Phase 3: integration tests for menu open / select / close ─────────────────
+
+#[tokio::test]
+async fn integration_menu_open_select_close() {
+    let path = test_socket_path();
+    let item = StubHandler::mock_item("app");
+    let handler = StubHandler::new().with_items(vec![item]);
+    let tx = spawn_server(path.clone(), handler).await;
+
+    let mut client = Client::connect(&path).await.expect("connect");
+
+    // open
+    let resp = client
+        .send(Method::MenuOpen {
+            item_id: "app".to_owned(),
+            parent_id: 0,
+        })
+        .await
+        .expect("menu_open");
+    let session = match resp.result {
+        Some(ResultPayload::MenuOpened(s)) => s,
+        other => panic!("expected MenuOpened, got {other:?}"),
+    };
+    assert_eq!(session.item_id, "app");
+    assert!(!session.nodes.is_empty());
+    let session_id = session.session_id.clone();
+    let first_node_id = session.nodes[0].id.clone();
+
+    // select leaf
+    let resp = client
+        .send(Method::MenuSelect {
+            session_id: session_id.clone(),
+            node_id: first_node_id,
+        })
+        .await
+        .expect("menu_select");
+    assert!(matches!(resp.result, Some(ResultPayload::Ok)));
+
+    // close
+    let resp = client
+        .send(Method::MenuClose {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("menu_close");
+    assert!(matches!(resp.result, Some(ResultPayload::Ok)));
+
+    // second close should fail
+    let resp = client
+        .send(Method::MenuClose { session_id })
+        .await
+        .expect("menu_close again");
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.unwrap().code, ErrorCode::InvalidSession);
+
+    tx.send(true).ok();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn integration_menu_open_missing_item() {
+    let path = test_socket_path();
+    let tx = spawn_server(path.clone(), StubHandler::new()).await;
+
+    let mut client = Client::connect(&path).await.expect("connect");
+    let resp = client
+        .send(Method::MenuOpen {
+            item_id: "ghost".to_owned(),
+            parent_id: 0,
+        })
+        .await
+        .expect("send");
+    assert!(resp.error.is_some());
+    assert_eq!(resp.error.unwrap().code, ErrorCode::NotFound);
+
+    tx.send(true).ok();
+    let _ = std::fs::remove_file(&path);
+}

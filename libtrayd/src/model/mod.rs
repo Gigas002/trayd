@@ -68,6 +68,24 @@ pub enum PixmapFormat {
     Argb32,
 }
 
+// ── Menu ──────────────────────────────────────────────────────────────────────
+
+/// A single node in a DBusMenu tree.
+///
+/// Leaf nodes have `children_display = None`; submenu nodes have
+/// `children_display = Some("submenu")`.
+#[derive(Debug, Clone)]
+pub struct MenuNode {
+    /// DBusMenu integer id; stable within one daemon session.
+    pub id: i32,
+    pub label: Option<String>,
+    pub enabled: bool,
+    pub visible: bool,
+    pub is_separator: bool,
+    /// `"submenu"` when children exist; `None` for leaf nodes.
+    pub children_display: Option<String>,
+}
+
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Events broadcast by the tray host to all subscribers.
@@ -76,6 +94,8 @@ pub enum HostEvent {
     ItemAdded(Item),
     ItemRemoved(ItemId),
     ItemUpdated(Item),
+    /// The DBusMenu tree for this item changed (layout or properties updated).
+    MenuChanged(ItemId),
 }
 
 // ── Scroll direction ──────────────────────────────────────────────────────────

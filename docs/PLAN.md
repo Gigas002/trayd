@@ -353,9 +353,9 @@ When a phase is marked complete:
 
 ### Phase 3 — DBusMenu (**libtrayd**) + menu IPC/CLI (**trayd**)
 
-- [ ] Menu tree snapshot + diff events on `TrayHost`.
-- [ ] `menu_open` / `menu_select` / `menu_close` in `trayd::ipc`.
-- [ ] `trayd menu-dmenu` CLI (§3.3).
+- [x] Menu tree snapshot + diff events on `TrayHost`.
+- [x] `menu_open` / `menu_select` / `menu_close` in `trayd::ipc`.
+- [x] `trayd menu-dmenu` CLI (§3.3).
 
 **Verify:** manual menu on an app with tray menu; scripted test with recorded menu fixture.
 
@@ -438,3 +438,4 @@ Update this plan when:
 | 2026-05-18 | **Phase 0** done: three crates scaffolded, CI without Cairo, `deny.toml` populated                                                                                     |
 | 2026-05-18 | **Phase 1** done: IPC protocol wire types, NDJSON codec, Unix-socket server+client, `StubHandler`, `trayd ping/list/activate`, golden fixtures, `docs/IPC.md` complete |
 | 2026-05-18 | **Phase 2** done: `libtrayd` SNI watcher + item proxy (`zbus`), `TrayHost` (list/pixmap/activate/scroll/subscribe), `Handler` trait async, `TrayHostHandler`, daemon D-Bus wiring with stub fallback, single-instance check, `trayd subscribe` CLI |
+| 2026-05-19 | **Phase 3** done: `libtrayd` DBusMenu proxy (`com.canonical.dbusmenu`), `MenuNode` model, `HostEvent::MenuChanged`, `TrayHost::get_menu/menu_event/about_to_show`, session management in `TrayHostHandler`, `menu_open/select/close` IPC, `trayd menu-dmenu` CLI with optional external launcher, `LayoutUpdated` background monitor per item |

@@ -5,8 +5,10 @@
 //! as a fallback); [`TrayHostHandler`] wires a real [`libtrayd::TrayHost`]
 //! and is used by the production daemon.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, warn};
@@ -148,10 +150,14 @@ async fn handle_connection<H: Handler>(
 
 // ── StubHandler (tests / fallback) ────────────────────────────────────────────
 
+static STUB_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 /// In-memory stub [`Handler`] for tests and the fallback daemon (no D-Bus).
 pub struct StubHandler {
     items: Vec<ItemInfo>,
     event_tx: tokio::sync::broadcast::Sender<HostEvent>,
+    /// Active session ids → item_id.
+    sessions: std::sync::Mutex<HashSet<String>>,
 }
 
 impl StubHandler {
@@ -160,6 +166,7 @@ impl StubHandler {
         Self {
             items: vec![],
             event_tx: tx,
+            sessions: std::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -184,6 +191,34 @@ impl StubHandler {
             tooltip: None,
             category: None,
         }
+    }
+
+    fn new_session_id(&self) -> String {
+        format!(
+            "stub-{}",
+            STUB_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    fn mock_menu_nodes() -> Vec<super::protocol::MenuNodeInfo> {
+        vec![
+            super::protocol::MenuNodeInfo {
+                id: "1".to_owned(),
+                label: Some("Action 1".to_owned()),
+                enabled: true,
+                visible: true,
+                is_separator: false,
+                children_display: None,
+            },
+            super::protocol::MenuNodeInfo {
+                id: "2".to_owned(),
+                label: Some("Action 2".to_owned()),
+                enabled: true,
+                visible: true,
+                is_separator: false,
+                children_display: None,
+            },
+        ]
     }
 }
 
@@ -225,17 +260,46 @@ impl Handler for StubHandler {
             }
 
             Method::GetPixmap { item_id, .. } => Response::err(ErrorPayload::bus_failed(format!(
-                "pixmap not yet available (Phase 2): {item_id}"
+                "pixmap not available in stub mode: {item_id}"
             ))),
 
-            Method::MenuOpen { item_id } => Response::err(ErrorPayload::bus_failed(format!(
-                "menu not yet available (Phase 3): {item_id}"
-            ))),
+            Method::MenuOpen { item_id, .. } => {
+                if !self.items.iter().any(|i| &i.id == item_id) {
+                    return Response::err(ErrorPayload::not_found(format!(
+                        "item not found: {item_id}"
+                    )));
+                }
+                let session_id = self.new_session_id();
+                self.sessions.lock().unwrap().insert(session_id.clone());
+                Response::ok(ResultPayload::MenuOpened(super::protocol::MenuSession {
+                    session_id,
+                    item_id: item_id.clone(),
+                    nodes: Self::mock_menu_nodes(),
+                }))
+            }
 
-            Method::MenuSelect { session_id, .. } | Method::MenuClose { session_id } => {
-                Response::err(ErrorPayload::invalid_session(format!(
-                    "no active session: {session_id}"
-                )))
+            Method::MenuSelect {
+                session_id,
+                node_id: _,
+            } => {
+                if self.sessions.lock().unwrap().contains(session_id) {
+                    Response::ok(ResultPayload::Ok)
+                } else {
+                    Response::err(ErrorPayload::invalid_session(format!(
+                        "no active session: {session_id}"
+                    )))
+                }
+            }
+
+            Method::MenuClose { session_id } => {
+                let removed = self.sessions.lock().unwrap().remove(session_id);
+                if removed {
+                    Response::ok(ResultPayload::Ok)
+                } else {
+                    Response::err(ErrorPayload::invalid_session(format!(
+                        "no active session: {session_id}"
+                    )))
+                }
             }
 
             Method::Subscribe => Response::err(ErrorPayload::internal(
@@ -249,7 +313,13 @@ impl Handler for StubHandler {
     }
 }
 
-// ── TrayHostHandler (Phase 2 production handler) ──────────────────────────────
+// ── TrayHostHandler (production handler) ─────────────────────────────────────
+
+static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn new_session_id() -> String {
+    format!("s-{}", SESSION_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 /// [`Handler`] backed by a real [`libtrayd::TrayHost`].
 ///
@@ -258,6 +328,8 @@ impl Handler for StubHandler {
 pub struct TrayHostHandler {
     host: Arc<libtrayd::TrayHost>,
     event_tx: tokio::sync::broadcast::Sender<HostEvent>,
+    /// Active menu sessions: session_id → item_id.
+    sessions: tokio::sync::Mutex<HashMap<String, String>>,
 }
 
 impl TrayHostHandler {
@@ -286,7 +358,11 @@ impl TrayHostHandler {
             }
         });
 
-        Self { host, event_tx }
+        Self {
+            host,
+            event_tx,
+            sessions: tokio::sync::Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -360,14 +436,88 @@ impl Handler for TrayHostHandler {
                 }
             }
 
-            Method::MenuOpen { item_id } => Response::err(ErrorPayload::bus_failed(format!(
-                "menu not yet available (Phase 3): {item_id}"
-            ))),
+            Method::MenuOpen { item_id, parent_id } => {
+                match self.host.get_menu(item_id, *parent_id).await {
+                    Ok(nodes) => {
+                        let session_id = new_session_id();
+                        self.sessions
+                            .lock()
+                            .await
+                            .insert(session_id.clone(), item_id.clone());
+                        Response::ok(ResultPayload::MenuOpened(super::protocol::MenuSession {
+                            session_id,
+                            item_id: item_id.clone(),
+                            nodes: nodes.into_iter().map(menu_node_to_info).collect(),
+                        }))
+                    }
+                    Err(libtrayd::TraydError::NotFound(id)) => {
+                        Response::err(ErrorPayload::not_found(format!("item not found: {id}")))
+                    }
+                    Err(libtrayd::TraydError::NoMenu(id)) => {
+                        Response::err(ErrorPayload::not_found(format!("item has no menu: {id}")))
+                    }
+                    Err(e) => Response::err(ErrorPayload::bus_failed(e.to_string())),
+                }
+            }
 
-            Method::MenuSelect { session_id, .. } | Method::MenuClose { session_id } => {
-                Response::err(ErrorPayload::invalid_session(format!(
-                    "no active session: {session_id}"
-                )))
+            Method::MenuSelect {
+                session_id,
+                node_id,
+            } => {
+                let item_id = {
+                    let sessions = self.sessions.lock().await;
+                    match sessions.get(session_id) {
+                        Some(id) => id.clone(),
+                        None => {
+                            return Response::err(ErrorPayload::invalid_session(format!(
+                                "no active session: {session_id}"
+                            )));
+                        }
+                    }
+                };
+
+                let node_id_int: i32 = match node_id.parse() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        return Response::err(ErrorPayload::invalid_request(format!(
+                            "node_id is not a valid integer: {node_id}"
+                        )));
+                    }
+                };
+
+                // Signal the app that the submenu is about to be shown.
+                // Ignore errors — app may not support AboutToShow.
+                let _ = self.host.about_to_show(&item_id, node_id_int).await;
+
+                match self.host.get_menu(&item_id, node_id_int).await {
+                    Ok(children) if !children.is_empty() => {
+                        // Submenu — return the children under the same session.
+                        Response::ok(ResultPayload::MenuOpened(super::protocol::MenuSession {
+                            session_id: session_id.clone(),
+                            item_id,
+                            nodes: children.into_iter().map(menu_node_to_info).collect(),
+                        }))
+                    }
+                    Ok(_) => {
+                        // Leaf node — fire the click event.
+                        match self.host.menu_event(&item_id, node_id_int).await {
+                            Ok(()) => Response::ok(ResultPayload::Ok),
+                            Err(e) => Response::err(ErrorPayload::bus_failed(e.to_string())),
+                        }
+                    }
+                    Err(e) => Response::err(ErrorPayload::bus_failed(e.to_string())),
+                }
+            }
+
+            Method::MenuClose { session_id } => {
+                let removed = self.sessions.lock().await.remove(session_id).is_some();
+                if removed {
+                    Response::ok(ResultPayload::Ok)
+                } else {
+                    Response::err(ErrorPayload::invalid_session(format!(
+                        "no active session: {session_id}"
+                    )))
+                }
             }
 
             Method::Subscribe => Response::err(ErrorPayload::internal(
@@ -407,6 +557,18 @@ fn map_host_event(ev: libtrayd::HostEvent) -> HostEvent {
         libtrayd::HostEvent::ItemUpdated(item) => HostEvent::ItemUpdated {
             item: item_to_info(item),
         },
+        libtrayd::HostEvent::MenuChanged(id) => HostEvent::MenuChanged { item_id: id.0 },
+    }
+}
+
+fn menu_node_to_info(node: libtrayd::MenuNode) -> super::protocol::MenuNodeInfo {
+    super::protocol::MenuNodeInfo {
+        id: node.id.to_string(),
+        label: node.label,
+        enabled: node.enabled,
+        visible: node.visible,
+        is_separator: node.is_separator,
+        children_display: node.children_display,
     }
 }
 

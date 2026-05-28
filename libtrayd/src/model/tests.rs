@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn menu_node_leaf() {
+    let node = MenuNode {
+        id: 42,
+        label: Some("Enable".to_owned()),
+        enabled: true,
+        visible: true,
+        is_separator: false,
+        children_display: None,
+    };
+    assert_eq!(node.id, 42);
+    assert!(node.children_display.is_none());
+}
+
+#[test]
+fn menu_node_submenu() {
+    let node = MenuNode {
+        id: 7,
+        label: Some("More".to_owned()),
+        enabled: true,
+        visible: true,
+        is_separator: false,
+        children_display: Some("submenu".to_owned()),
+    };
+    assert_eq!(node.children_display.as_deref(), Some("submenu"));
+}
+
+#[test]
+fn menu_node_separator() {
+    let node = MenuNode {
+        id: 0,
+        label: None,
+        enabled: false,
+        visible: true,
+        is_separator: true,
+        children_display: None,
+    };
+    assert!(node.is_separator);
+    assert!(node.label.is_none());
+}
+
+#[test]
+fn host_event_menu_changed_carries_id() {
+    let id = ItemId("org.kde.plasma.nm/StatusNotifierItem".to_owned());
+    let ev = HostEvent::MenuChanged(id.clone());
+    assert!(matches!(ev, HostEvent::MenuChanged(ref i) if *i == id));
+}
+
+#[test]
 fn item_id_display() {
     let id = ItemId("org.kde.plasma.nm/StatusNotifierItem".to_owned());
     assert_eq!(id.to_string(), "org.kde.plasma.nm/StatusNotifierItem");

@@ -59,7 +59,13 @@ pub enum Method {
         delta: i32,
     },
     /// Open a DBusMenu tree for an item; returns a [`MenuSession`].
-    MenuOpen { item_id: String },
+    ///
+    /// `parent_id` selects the subtree root (0 = top-level menu).
+    MenuOpen {
+        item_id: String,
+        #[serde(default)]
+        parent_id: i32,
+    },
     /// Select a menu node within an open session.
     ///
     /// For leaf nodes returns `{ "type": "ok" }`.

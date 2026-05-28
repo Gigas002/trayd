@@ -578,7 +578,7 @@ The menu tree for an item has changed. Clients that have an open session for thi
 | **Phase 0** | Workspace scaffold; `docs/IPC.md` stub                                                                                       | ✅ complete |
 | **Phase 1** | IPC skeleton: `trayd::ipc::protocol` wire types, NDJSON codec, Unix socket server/client, mock handler, golden fixture tests | 🔲 planned  |
 | **Phase 2** | Real D-Bus SNI host (`libtrayd`), daemon wiring, `trayd list` / `trayd subscribe` / `trayd activate`                         | 🔲 planned  |
-| **Phase 3** | DBusMenu integration (`libtrayd`), `menu_open` / `menu_select` / `menu_close` IPC, `trayd menu-dmenu` CLI                    | 🔲 planned  |
+| **Phase 3** | DBusMenu integration (`libtrayd`), `menu_open` / `menu_select` / `menu_close` IPC, `trayd menu-dmenu` CLI                    | ✅ complete |
 
 See `docs/PLAN.md` §8 for the full phase breakdown.
 

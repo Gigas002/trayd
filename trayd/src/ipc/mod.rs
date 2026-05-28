@@ -111,6 +111,144 @@ pub async fn activate(socket_path: &Path, item_id: String) -> Result<(), TraydBi
     }
 }
 
+/// `trayd menu-list --item <id> [--node <id>]` — print visible menu labels, one per line.
+///
+/// Separators print as `---`; submenus print as `Label >`.
+/// Pass `--node <id>` (as printed by `menu-click` on exit 2) to list a submenu.
+pub async fn menu_list(
+    socket_path: &Path,
+    item_id: String,
+    node: Option<i32>,
+) -> Result<(), TraydBinError> {
+    let mut c = client::Client::connect(socket_path).await?;
+    let resp = c
+        .send(Method::MenuOpen {
+            item_id,
+            parent_id: node.unwrap_or(0),
+        })
+        .await?;
+    match resp.into_result() {
+        Ok(ResultPayload::MenuOpened(session)) => {
+            let session_id = session.session_id.clone();
+            for node in session.nodes.iter().filter(|n| n.visible) {
+                println!("{}", node_label(node));
+            }
+            let _ = c.send(Method::MenuClose { session_id }).await;
+            Ok(())
+        }
+        Ok(other) => {
+            tracing::warn!(?other, "unexpected result for menu_open");
+            Ok(())
+        }
+        Err(err) => Err(IpcError::Remote {
+            code: err.code,
+            message: err.message,
+        }
+        .into()),
+    }
+}
+
+/// `trayd menu-click --item <id> [--label <label>]` — click a menu item by label.
+///
+/// If `label` is `None`, reads one line from stdin so the command can be
+/// used at the end of a pipe: `trayd menu-list … | rofi -dmenu | trayd menu-click …`
+pub async fn menu_click(
+    socket_path: &Path,
+    item_id: String,
+    label: Option<String>,
+) -> Result<(), TraydBinError> {
+    let label = match label {
+        Some(l) => l,
+        None => {
+            use std::io::BufRead;
+            let mut buf = String::new();
+            std::io::stdin()
+                .lock()
+                .read_line(&mut buf)
+                .map_err(IpcError::Io)?;
+            buf.trim().to_owned()
+        }
+    };
+
+    if label.is_empty() {
+        return Ok(());
+    }
+
+    let mut c = client::Client::connect(socket_path).await?;
+    let resp = c
+        .send(Method::MenuOpen {
+            item_id,
+            parent_id: 0,
+        })
+        .await?;
+    let session = match resp.into_result() {
+        Ok(ResultPayload::MenuOpened(s)) => s,
+        Ok(other) => {
+            tracing::warn!(?other, "unexpected result for menu_open");
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(IpcError::Remote {
+                code: err.code,
+                message: err.message,
+            }
+            .into());
+        }
+    };
+
+    let session_id = session.session_id.clone();
+
+    let matched = session
+        .nodes
+        .iter()
+        .filter(|n| n.visible)
+        .find(|n| node_label(n) == label);
+
+    if let Some(node) = matched {
+        let node_id = node.id.clone();
+        let resp = c
+            .send(Method::MenuSelect {
+                session_id: session_id.clone(),
+                node_id: node_id.clone(),
+            })
+            .await;
+        let _ = c.send(Method::MenuClose { session_id }).await;
+        match resp?.into_result() {
+            Ok(ResultPayload::MenuOpened(_)) => {
+                // Submenu: print the node_id so the caller can pass it to menu-list --node
+                println!("{node_id}");
+                std::process::exit(2);
+            }
+            Ok(ResultPayload::Ok) => {}
+            Ok(other) => tracing::warn!(?other, "unexpected menu_select result"),
+            Err(err) => {
+                return Err(IpcError::Remote {
+                    code: err.code,
+                    message: err.message,
+                }
+                .into());
+            }
+        }
+    } else {
+        let _ = c.send(Method::MenuClose { session_id }).await;
+    }
+
+    Ok(())
+}
+
+fn node_label(node: &protocol::MenuNodeInfo) -> String {
+    if node.is_separator {
+        "---".to_owned()
+    } else {
+        let label = node.label.as_deref().unwrap_or("(unnamed)");
+        if node.children_display.as_deref() == Some("submenu") {
+            format!("{label} >")
+        } else {
+            label.to_owned()
+        }
+    }
+}
+
 /// `trayd subscribe` — stream tray events to stdout until Ctrl+C.
 pub async fn subscribe(socket_path: &Path) -> Result<(), TraydBinError> {
     use codec::{FramedReader, FramedWriter};

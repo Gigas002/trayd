@@ -14,6 +14,9 @@ pub enum TraydError {
     #[error("no pixmap available for item {0}")]
     NoPixmap(String),
 
+    #[error("item has no menu: {0}")]
+    NoMenu(String),
+
     #[error("tray host error: {0}")]
     Internal(String),
 }

@@ -3,10 +3,13 @@
 //! Both `WatcherIface` and `StatusNotifierItemProxy` are internal to the crate.
 //! External callers use [`crate::TrayHost`].
 
+pub(crate) mod menu;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, broadcast};
+use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 use zbus::fdo;
 use zbus::object_server::SignalEmitter;
@@ -49,6 +52,9 @@ pub(crate) trait StatusNotifierItem {
     /// `(icon_name, icon_pixmaps, title, description)`
     #[zbus(property)]
     fn tool_tip(&self) -> zbus::Result<(String, Vec<(i32, i32, Vec<u8>)>, String, String)>;
+    /// Object path of the item's `com.canonical.dbusmenu` menu (if any).
+    #[zbus(property)]
+    fn menu(&self) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 }
 
 // ── Shared watcher state ──────────────────────────────────────────────────────
@@ -66,6 +72,8 @@ pub(crate) struct TrackedItem {
     pub unique_sender: String,
     /// Last-known properties.
     pub item: Item,
+    /// Object path of the `com.canonical.dbusmenu` menu, if the item has one.
+    pub menu_path: Option<String>,
 }
 
 /// Shared mutable state of the SNI watcher.
@@ -200,6 +208,7 @@ impl WatcherIface {
         );
 
         let item = Self::read_item(&self.conn, &dest, &path, &item_id).await;
+        let menu_path = read_menu_path(&self.conn, &dest, &path).await;
 
         {
             let mut state = self.state.lock().await;
@@ -211,7 +220,18 @@ impl WatcherIface {
                     path: path.clone(),
                     unique_sender: unique_sender.clone(),
                     item: item.clone(),
+                    menu_path: menu_path.clone(),
                 },
+            );
+        }
+
+        if let Some(ref mp) = menu_path {
+            spawn_menu_monitor(
+                self.conn.clone(),
+                dest.clone(),
+                mp.clone(),
+                item_id.clone(),
+                self.event_tx.clone(),
             );
         }
 
@@ -272,6 +292,66 @@ impl WatcherIface {
 
     #[zbus(signal)]
     async fn status_notifier_host_registered(ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+// ── Menu helpers ──────────────────────────────────────────────────────────────
+
+/// Fetch the `Menu` property (object path) from a StatusNotifierItem.
+///
+/// Returns `None` if the item does not expose a menu or the property call fails.
+pub(crate) async fn read_menu_path(
+    conn: &zbus::Connection,
+    service: &str,
+    path: &str,
+) -> Option<String> {
+    let proxy = StatusNotifierItemProxy::builder(conn)
+        .destination(service)
+        .ok()?
+        .path(path)
+        .ok()?
+        .build()
+        .await
+        .ok()?;
+    let op = proxy.menu().await.ok()?;
+    let s = op.as_str();
+    // Treat "/" (no-menu sentinel) as absent.
+    if s.is_empty() || s == "/" {
+        None
+    } else {
+        Some(s.to_owned())
+    }
+}
+
+/// Spawn a background task that forwards `LayoutUpdated` signals from the
+/// item's DBusMenu into `HostEvent::MenuChanged` events.
+pub(crate) fn spawn_menu_monitor(
+    conn: zbus::Connection,
+    service: String,
+    menu_path: String,
+    item_id: ItemId,
+    event_tx: broadcast::Sender<HostEvent>,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = run_menu_monitor(conn, service, menu_path, item_id, event_tx).await {
+            warn!(error = %e, "menu monitor exited with error");
+        }
+    });
+}
+
+async fn run_menu_monitor(
+    conn: zbus::Connection,
+    service: String,
+    menu_path: String,
+    item_id: ItemId,
+    event_tx: broadcast::Sender<HostEvent>,
+) -> Result<(), TraydError> {
+    let proxy = menu::menu_proxy(&conn, &service, &menu_path).await?;
+    let mut stream = proxy.receive_layout_updated().await?;
+    while stream.next().await.is_some() {
+        debug!(item = %item_id, "menu LayoutUpdated");
+        let _ = event_tx.send(HostEvent::MenuChanged(item_id.clone()));
+    }
+    Ok(())
 }
 
 // ── Pixmap helpers ────────────────────────────────────────────────────────────

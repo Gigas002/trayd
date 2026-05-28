@@ -14,7 +14,7 @@ use crate::dbus::{
     spawn_name_monitor,
 };
 use crate::error::TraydError;
-use crate::model::{HostEvent, Item, ItemId, Pixmap, ScrollDirection};
+use crate::model::{HostEvent, Item, ItemId, MenuNode, Pixmap, ScrollDirection};
 
 #[cfg(test)]
 mod tests;
@@ -117,6 +117,37 @@ impl TrayHost {
         pick_pixmap(frames, size).ok_or_else(|| TraydError::NoPixmap(item_id.to_owned()))
     }
 
+    // ── Menu ──────────────────────────────────────────────────────────────────
+
+    /// Fetch the direct children of `parent_id` from the item's DBusMenu.
+    ///
+    /// Use `parent_id = 0` for the top-level nodes.  For sub-menu navigation,
+    /// pass the node id returned from a prior `menu_event` call.
+    ///
+    /// Returns `Err(TraydError::NoMenu)` if the item has no associated menu.
+    pub async fn get_menu(
+        &self,
+        item_id: &str,
+        parent_id: i32,
+    ) -> Result<Vec<MenuNode>, TraydError> {
+        let (service, menu_path) = self.resolve_menu(item_id)?;
+        crate::dbus::menu::get_menu_layout(&self.conn, &service, &menu_path, parent_id).await
+    }
+
+    /// Send a `"clicked"` event for `node_id` to the item's DBusMenu.
+    pub async fn menu_event(&self, item_id: &str, node_id: i32) -> Result<(), TraydError> {
+        let (service, menu_path) = self.resolve_menu(item_id)?;
+        crate::dbus::menu::send_menu_event(&self.conn, &service, &menu_path, node_id).await
+    }
+
+    /// Signal that submenu `node_id` is about to be shown.
+    ///
+    /// Returns `true` if the layout should be refreshed before display.
+    pub async fn about_to_show(&self, item_id: &str, node_id: i32) -> Result<bool, TraydError> {
+        let (service, menu_path) = self.resolve_menu(item_id)?;
+        crate::dbus::menu::about_to_show(&self.conn, &service, &menu_path, node_id).await
+    }
+
     // ── Subscribe ─────────────────────────────────────────────────────────────
 
     /// Subscribe to a stream of [`HostEvent`]s.  Each call creates an
@@ -152,5 +183,21 @@ impl TrayHost {
             .values()
             .map(|t| t.item_id.clone())
             .collect()
+    }
+
+    fn resolve_menu(&self, item_id: &str) -> Result<(String, String), TraydError> {
+        let state = self
+            .state
+            .try_lock()
+            .map_err(|_| TraydError::Internal("state lock contended; retry".to_owned()))?;
+        let tracked = state
+            .items
+            .get(item_id)
+            .ok_or_else(|| TraydError::NotFound(item_id.to_owned()))?;
+        let menu_path = tracked
+            .menu_path
+            .clone()
+            .ok_or_else(|| TraydError::NoMenu(item_id.to_owned()))?;
+        Ok((tracked.service.clone(), menu_path))
     }
 }

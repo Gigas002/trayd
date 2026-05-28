@@ -36,6 +36,10 @@ async fn run(cli: Cli) -> Result<(), TraydBinError> {
                 Command::List => ipc::list(&socket_path).await,
                 Command::Activate { id } => ipc::activate(&socket_path, id).await,
                 Command::Subscribe => ipc::subscribe(&socket_path).await,
+                Command::MenuList { item, node } => ipc::menu_list(&socket_path, item, node).await,
+                Command::MenuClick { item, label } => {
+                    ipc::menu_click(&socket_path, item, label).await
+                }
                 Command::Run => unreachable!(),
             }
         }
