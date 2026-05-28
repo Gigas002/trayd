@@ -48,8 +48,8 @@ jobs:
           files: ${{ env.ARCHIVE }}
           generate_release_notes: true
 
-  github-release-trayd-client:
-    name: GitHub Release
+  github-release-trayctl:
+    name: GitHub Release (trayctl)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -59,20 +59,50 @@ jobs:
       - name: Build cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary (trayd-client)
-        run: cargo build -p trayd-client --release
+      - name: Build release binary (trayctl)
+        run: cargo build -p trayctl --release
 
       - name: Strip binary
-        run: strip target/release/trayd-client
+        run: strip target/release/trayctl
 
       - name: Package archive
         run: |
           VERSION="${GITHUB_REF_NAME:-dev}"
-          ARCHIVE="trayd-client-${VERSION}-x86_64-linux.tar.gz"
-          tar -czf "$ARCHIVE" -C target/release trayd-client
+          ARCHIVE="trayctl-${VERSION}-x86_64-linux.tar.gz"
+          tar -czf "$ARCHIVE" -C target/release trayctl
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
-      # Only runs on real tag pushes; skipped for workflow_dispatch.
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ env.ARCHIVE }}
+          generate_release_notes: true
+
+  github-release-tray-tui:
+    name: GitHub Release (tray-tui)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary (tray-tui)
+        run: cargo build -p tray-tui --release
+
+      - name: Strip binary
+        run: strip target/release/tray-tui
+
+      - name: Package archive
+        run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          ARCHIVE="tray-tui-${VERSION}-x86_64-linux.tar.gz"
+          tar -czf "$ARCHIVE" -C target/release tray-tui
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
       - name: Create GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3

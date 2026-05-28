@@ -1,5 +1,5 @@
 [workspace]
-members = ["libtrayd", "trayd", "trayd-client"]
+members = ["libtrayd", "trayd", "trayctl", "tray-tui"]
 resolver = "3"
 
 [workspace.package]

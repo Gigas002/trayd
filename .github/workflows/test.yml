@@ -38,9 +38,12 @@ jobs:
       - name: Generate coverage report (trayd)
         run: |
           cargo llvm-cov --all-features -p trayd --lcov --output-path lcov-trayd.info
-      - name: Generate coverage report (trayd-client)
+      - name: Generate coverage report (trayctl)
         run: |
-          cargo llvm-cov --all-features -p trayd-client --lcov --output-path lcov-trayd-client.info
+          cargo llvm-cov --all-features -p trayctl --lcov --output-path lcov-trayctl.info
+      - name: Generate coverage report (tray-tui)
+        run: |
+          cargo llvm-cov --all-features -p tray-tui --lcov --output-path lcov-tray-tui.info
       - name: Upload libtrayd coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
@@ -61,12 +64,22 @@ jobs:
           verbose: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      - name: Upload trayd coverage to Codecov
+      - name: Upload trayctl coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
-          files: ./lcov-trayd-client.info
-          flags: trayd-client
-          name: trayd-client
+          files: ./lcov-trayctl.info
+          flags: trayctl
+          name: trayctl
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload tray-tui coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./lcov-tray-tui.info
+          flags: tray-tui
+          name: tray-tui
           fail_ci_if_error: false
           verbose: true
         env:

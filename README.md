@@ -4,15 +4,16 @@ Minimal Wayland-session system tray daemon (`zbus`) with a documented IPC socket
 
 ## Workspace
 
-| Crate | Role |
-| ----- | ---- |
-| `libtrayd` | D-Bus tray host (library) |
-| `trayd` | Daemon + CLI + IPC server |
-| `trayd-client` | Terminal UI (socket IPC only) |
+| Crate      | Role                          |
+| ---------- | ----------------------------- |
+| `libtrayd` | D-Bus tray host (library)     |
+| `trayd`    | Daemon + IPC server           |
+| `trayctl`  | One-shot menu orchestrator    |
+| `tray-tui` | Terminal UI (socket IPC only) |
 
 See [`docs/PLAN.md`](docs/PLAN.md) and [`docs/IPC.md`](docs/IPC.md).
 
 ```sh
-cargo build -p trayd -p trayd-client -p libtrayd
+cargo build --workspace
 cargo test --workspace
 ```

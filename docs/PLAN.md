@@ -154,7 +154,7 @@ trayd/                           # workspace root
 
 **All external consumers** duplicate serde wire types per **`docs/IPC.md`** — no shared IPC crate.
 
-**Migration note:** rename existing `trayd-client/` → `tray-tui/` when implementing Phase 4; update CI/deploy binary names.
+**Done (Phase 0):** `trayd-client` removed; **`tray-tui`** and **`trayctl`** crates wired in workspace + CI.
 
 ---
 
@@ -335,10 +335,10 @@ When a phase is marked complete:
 
 ### Phase 0 — Workspace scaffold + hygiene
 
-- [x] Crates `libtrayd`, `trayd`, stub client crate (to rename → `tray-tui`).
+- [x] Crates `libtrayd`, `trayd`, `trayctl`, `tray-tui` (stubs).
 - [x] Workspace metadata, `deny.toml`, CI without Cairo for trayd crates.
 - [x] `docs/IPC.md` stub.
-- [ ] Add **`trayctl`** crate skeleton; rename **`trayd-client` → `tray-tui`** in manifests/CI.
+- [x] Add **`trayctl`** crate skeleton; rename **`trayd-client` → `tray-tui`** in manifests/CI.
 
 **Verify:** §7 gates on scaffold.
 

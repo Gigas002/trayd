@@ -1,0 +1,22 @@
+[package]
+name = "trayctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "One-shot tray menu orchestrator (IPC client + dmenu bridge)."
+keywords.workspace = true
+
+[[bin]]
+name = "trayctl"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

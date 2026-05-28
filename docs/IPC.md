@@ -10,7 +10,7 @@
 
 ## Consumers
 
-External programs (**abar**, **trayd-client**, shell, dmenu wrappers) implement this protocol against the socket and/or invoke **`trayd` CLI** subcommands. They do **not** link `libtrayd` or the `trayd` crate.
+External programs (**abar**, **trayctl**, **tray-tui**, shell) implement this protocol against the socket. They do **not** link `libtrayd` or the `trayd` crate. **`trayd`** exposes only daemon/debug CLI (`run`, `ping`); menu orchestration lives in **trayctl**.
 
 ## Methods (planned)
 

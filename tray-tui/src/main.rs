@@ -14,7 +14,7 @@ fn main() -> ExitCode {
     match App::run_stub() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            tracing::error!(%err, "trayd-client failed");
+            tracing::error!(%err, "tray-tui failed");
             ExitCode::from(1)
         }
     }
