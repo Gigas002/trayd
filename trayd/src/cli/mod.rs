@@ -13,8 +13,6 @@ pub enum Command {
     Run,
     /// Check daemon reachability over IPC.
     Ping,
-    /// List tray items (machine-readable when implemented).
-    List,
 }
 
 #[cfg(test)]

@@ -344,10 +344,10 @@ When a phase is marked complete:
 
 ### Phase 1 — IPC protocol + daemon socket (**trayd** only)
 
-- [ ] Wire types for §3.2 (`ping`, `subscribe`, `get_items`, `get_menu`, `activate`, `get_pixmap`).
-- [ ] NDJSON codec + Unix socket server under `trayd/src/ipc/`.
-- [ ] Mock `TrayHost` handler for golden tests (`examples/ipc-examples/`).
-- [ ] **`docs/IPC.md`** complete; no menu session API on daemon.
+- [x] Wire types for §3.2 (`ping`, `subscribe`, `get_items`, `get_menu`, `activate`, `get_pixmap`).
+- [x] NDJSON codec + Unix socket server under `trayd/src/ipc/`.
+- [x] Mock `TrayHost` handler for golden tests (`examples/ipc-examples/`).
+- [x] **`docs/IPC.md`** complete; no menu session API on daemon.
 
 **Verify:** unit + integration tests on temp socket; **libtrayd** may remain stub.
 

@@ -12,11 +12,12 @@ use clap::Parser;
 use crate::cli::{Cli, Command};
 use crate::error::TraydBinError;
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     logger::init();
     let cli = Cli::parse();
 
-    match run(cli) {
+    match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             tracing::error!(%err, "trayd failed");
@@ -25,10 +26,9 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), TraydBinError> {
+async fn run(cli: Cli) -> Result<(), TraydBinError> {
     match cli.command.unwrap_or(Command::Run) {
-        Command::Run => daemon::run(),
-        Command::Ping => ipc::stub_ping(),
-        Command::List => ipc::stub_list(),
+        Command::Run => daemon::run().await,
+        Command::Ping => ipc::ping(&ipc::default_socket_path()).await,
     }
 }
