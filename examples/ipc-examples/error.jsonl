@@ -1,0 +1,2 @@
+{"v":1,"cmd":"get_menu","app_id":"unknown.App","submenu_id":null}
+{"v":1,"error":{"code":"NOT_FOUND","message":"app_id not registered"}}

@@ -1,15 +1,10 @@
-use libtrayd::TrayHost;
-use tracing::info;
-
 use crate::error::TraydBinError;
+use crate::ipc::server::IpcServer;
 
-pub fn run() -> Result<(), TraydBinError> {
-    let _host = TrayHost::new();
-    info!(
-        version = libtrayd::VERSION,
-        "trayd daemon stub (Phase 2 wires D-Bus + IPC server)"
-    );
-    Ok(())
+pub async fn run() -> Result<(), TraydBinError> {
+    let socket_path = crate::ipc::default_socket_path();
+    let server = IpcServer::new(socket_path);
+    server.run().await
 }
 
 #[cfg(test)]

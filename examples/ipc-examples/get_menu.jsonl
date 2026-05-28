@@ -1,0 +1,2 @@
+{"v":1,"cmd":"get_menu","app_id":"org.example.App","submenu_id":null}
+{"v":1,"type":"menu","app_id":"org.example.App","items":[{"item_id":1,"label":"Action","is_submenu":false},{"item_id":2,"label":"Submenu","is_submenu":true}]}

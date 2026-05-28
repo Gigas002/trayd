@@ -1,0 +1,2 @@
+{"v":1,"cmd":"subscribe"}
+{"v":1,"type":"event","event":{"kind":"update","items":[{"app_id":"org.example.App","title":"Example App","status":"active","icon_handle":"example-app"}]}}
