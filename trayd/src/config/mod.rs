@@ -37,8 +37,8 @@ impl Default for Config {
 impl Config {
     /// Load from an explicit path, or discover via XDG, or return defaults.
     ///
-    /// - Explicit path given → error if missing or unparseable.
-    /// - XDG path exists → parse it; error if unparseable.
+    /// - Explicit path given → error if missing or unparsable.
+    /// - XDG path exists → parse it; error if unparsable.
     /// - Nothing found → silent defaults.
     pub fn load(explicit: Option<&Path>) -> Result<Self, TraydBinError> {
         if let Some(path) = explicit {
