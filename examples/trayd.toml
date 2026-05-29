@@ -1,4 +1,5 @@
-# trayd daemon config (optional, Phase 2+)
-# Default socket: $XDG_RUNTIME_DIR/trayd.sock
+# trayd daemon config (place at $XDG_CONFIG_HOME/trayd/trayd.toml)
+# All fields are optional; shown values are the defaults.
 
-# socket = "/run/user/1000/trayd.sock"
+# socket_path = "/run/user/1000/trayd.sock"  # default: $XDG_RUNTIME_DIR/trayd.sock
+# log_filter  = "warn"                        # overridden by RUST_LOG

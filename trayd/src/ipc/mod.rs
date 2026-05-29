@@ -31,7 +31,7 @@ pub async fn ping(socket_path: &Path) -> Result<(), TraydBinError> {
 
     match ipc_codec::read_response(&mut reader).await? {
         Some(IpcResponse::Ok(r)) if r.payload == OkPayload::Pong => {
-            tracing::info!("pong");
+            println!("pong");
             Ok(())
         }
         _ => Err(TraydBinError::UnexpectedResponse),

@@ -10,14 +10,24 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
+use crate::config::Config;
 use crate::error::TraydBinError;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    logger::init();
     let cli = Cli::parse();
 
-    match run(cli).await {
+    let config = match Config::load(cli.config.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    logger::init(&config.log_filter);
+
+    match run(cli.command, config).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             tracing::error!(%err, "trayd failed");
@@ -26,9 +36,9 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), TraydBinError> {
-    match cli.command.unwrap_or(Command::Run) {
-        Command::Run => daemon::run().await,
-        Command::Ping => ipc::ping(&ipc::default_socket_path()).await,
+async fn run(command: Option<Command>, config: Config) -> Result<(), TraydBinError> {
+    match command.unwrap_or(Command::Run) {
+        Command::Run => daemon::run(&config).await,
+        Command::Ping => ipc::ping(&config.socket_path).await,
     }
 }

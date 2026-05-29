@@ -13,6 +13,7 @@ name = "trayd"
 path = "src/main.rs"
 
 [dependencies]
+base64-ng = { workspace = true }
 clap = { workspace = true }
 libtrayd = { workspace = true }
 serde = { workspace = true }

@@ -11,8 +11,13 @@ fn temp_socket(tag: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("trayd-test-{}-{}.sock", tag, std::process::id()))
 }
 
+/// Starts a real IpcServer backed by a real TrayHost.
+/// Requires a running D-Bus session bus — mark callers `#[ignore]` in CI.
 async fn start_server(path: &std::path::Path) -> tokio::task::JoinHandle<()> {
-    let server = IpcServer::new(path);
+    let host = libtrayd::TrayHost::start()
+        .await
+        .expect("D-Bus session bus required for this test");
+    let server = IpcServer::new(path, host);
     let handle = tokio::spawn(async move {
         let _ = server.run().await;
     });
@@ -32,6 +37,7 @@ async fn connect(
 }
 
 #[tokio::test]
+#[ignore = "requires D-Bus session bus"]
 async fn ping_returns_pong() {
     let path = temp_socket("ping");
     let handle = start_server(&path).await;
@@ -49,6 +55,7 @@ async fn ping_returns_pong() {
 }
 
 #[tokio::test]
+#[ignore = "requires D-Bus session bus"]
 async fn get_items_returns_list() {
     let path = temp_socket("items");
     let handle = start_server(&path).await;
@@ -63,13 +70,14 @@ async fn get_items_returns_list() {
     let _ = std::fs::remove_file(&path);
 
     assert!(
-        matches!(resp, IpcResponse::Ok(ref ok) if matches!(&ok.payload, OkPayload::Items { items } if !items.is_empty()))
+        matches!(resp, IpcResponse::Ok(ref ok) if matches!(&ok.payload, OkPayload::Items { .. }))
     );
 }
 
 #[tokio::test]
-async fn get_menu_top_level() {
-    let path = temp_socket("menu-top");
+#[ignore = "requires D-Bus session bus; GetMenu is Phase 3 (returns NotImplemented)"]
+async fn get_menu_returns_not_implemented() {
+    let path = temp_socket("menu");
     let handle = start_server(&path).await;
 
     let (mut r, mut w) = connect(&path).await;
@@ -87,40 +95,12 @@ async fn get_menu_top_level() {
     handle.abort();
     let _ = std::fs::remove_file(&path);
 
-    assert!(matches!(
-        resp,
-        IpcResponse::Ok(ref ok) if matches!(&ok.payload, OkPayload::Menu { items, .. } if items.len() == 2)
-    ));
+    assert!(matches!(resp, IpcResponse::Err(_)));
 }
 
 #[tokio::test]
-async fn get_menu_submenu() {
-    let path = temp_socket("menu-sub");
-    let handle = start_server(&path).await;
-
-    let (mut r, mut w) = connect(&path).await;
-    codec::write_request(
-        &mut w,
-        &IpcRequest::new(Cmd::GetMenu {
-            app_id: "org.example.App".into(),
-            submenu_id: Some(2),
-        }),
-    )
-    .await
-    .unwrap();
-    let resp = codec::read_response(&mut r).await.unwrap().unwrap();
-
-    handle.abort();
-    let _ = std::fs::remove_file(&path);
-
-    assert!(matches!(
-        resp,
-        IpcResponse::Ok(ref ok) if matches!(&ok.payload, OkPayload::Menu { items, .. } if items.len() == 1)
-    ));
-}
-
-#[tokio::test]
-async fn activate_returns_ack() {
+#[ignore = "requires D-Bus session bus; returns NotFound when no real app is registered"]
+async fn activate_unknown_returns_not_found() {
     let path = temp_socket("activate");
     let handle = start_server(&path).await;
 
@@ -129,7 +109,7 @@ async fn activate_returns_ack() {
         &mut w,
         &IpcRequest::new(Cmd::Activate {
             app_id: "org.example.App".into(),
-            item_id: 1,
+            item_id: 0,
         }),
     )
     .await
@@ -139,11 +119,12 @@ async fn activate_returns_ack() {
     handle.abort();
     let _ = std::fs::remove_file(&path);
 
-    assert!(matches!(resp, IpcResponse::Ok(ref ok) if ok.payload == OkPayload::Ack));
+    assert!(matches!(resp, IpcResponse::Err(_)));
 }
 
 #[tokio::test]
-async fn get_pixmap_returns_pixmap() {
+#[ignore = "requires D-Bus session bus; returns NotFound when no real app is registered"]
+async fn get_pixmap_unknown_returns_not_found() {
     let path = temp_socket("pixmap");
     let handle = start_server(&path).await;
 
@@ -162,15 +143,11 @@ async fn get_pixmap_returns_pixmap() {
     handle.abort();
     let _ = std::fs::remove_file(&path);
 
-    assert!(matches!(
-        resp,
-        IpcResponse::Ok(ref ok) if matches!(&ok.payload, OkPayload::Pixmap { size, .. } if *size == 22)
-    ));
+    assert!(matches!(resp, IpcResponse::Err(_)));
 }
 
 #[tokio::test]
 async fn codec_roundtrip_request() {
-    use super::protocol::{Cmd, IpcRequest};
     let req = IpcRequest::new(Cmd::GetMenu {
         app_id: "foo".into(),
         submenu_id: Some(3),

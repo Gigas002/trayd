@@ -353,9 +353,9 @@ When a phase is marked complete:
 
 ### Phase 2 — D-Bus SNI host (**libtrayd**) + daemon wiring
 
-- [ ] `libtrayd::dbus/` + `TrayHost` (items, pixmaps, activate, events).
-- [ ] `trayd run`: real host + IPC server; single-instance policy.
-- [ ] `trayd ping` over live socket.
+- [x] `libtrayd::dbus/` + `TrayHost` (items, pixmaps, activate, events).
+- [x] `trayd run`: real host + IPC server; single-instance policy.
+- [x] `trayd ping` over live socket.
 
 **Verify:** manual with `nm-applet` / `blueman`; recreate learnings from [trayd PR #1](https://github.com/Gigas002/trayd/pull/1) without daemon spawn code.
 
