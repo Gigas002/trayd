@@ -7,6 +7,7 @@ repository.workspace = true
 homepage.workspace = true
 description = "StatusNotifier tray host (D-Bus via zbus)."
 keywords.workspace = true
+readme = "../README.md"
 
 [dependencies]
 thiserror  = { workspace = true }
