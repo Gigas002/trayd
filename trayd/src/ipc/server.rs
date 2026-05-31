@@ -4,7 +4,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 
-use libtrayd::{ItemId, TrayHost, TraydError};
+use libtrayd::{ItemId, PixmapData, TrayHost, TraydError};
 
 use crate::error::TraydBinError;
 use crate::ipc::codec;
@@ -111,7 +111,11 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
         Cmd::GetPixmap { app_id, size } => {
             let id = ItemId::from(app_id.clone());
             let resp = match host.get_pixmap(&id, size as u16).await {
-                Ok(bytes) => {
+                Ok(PixmapData {
+                    width,
+                    height,
+                    data: bytes,
+                }) => {
                     let enc_len = base64_ng::STANDARD.encoded_len(bytes.len()).unwrap_or(0);
                     let mut buf = vec![0u8; enc_len];
                     let n = base64_ng::STANDARD
@@ -119,7 +123,13 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
                         .unwrap_or(0);
                     // SAFETY: base64 output is always ASCII
                     let data = String::from_utf8(buf[..n].to_vec()).unwrap_or_default();
-                    IpcResponse::ok(OkPayload::Pixmap { app_id, size, data })
+                    IpcResponse::ok(OkPayload::Pixmap {
+                        app_id,
+                        size,
+                        width,
+                        height,
+                        data,
+                    })
                 }
                 Err(TraydError::NotFound(_)) => {
                     IpcResponse::err(ErrorCode::NotFound, format!("{app_id} not found"))

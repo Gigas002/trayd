@@ -24,7 +24,7 @@ use zbus::zvariant::OwnedValue;
 use crate::{
     TraydError,
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
-    model::{HostEvent, IconData, IconPixmap, ItemId, MenuNode, TrayItem, TrayStatus},
+    model::{HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, TrayItem, TrayStatus},
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ struct HostState {
     items: HashMap<ItemId, TrayItem>,
     /// Derived pixmap cache: `(app_id, requested_size_px)` → best-matched ARGB32 bytes.
     /// Invalidated on icon change signals and item removal.
-    pixmap_cache: HashMap<(ItemId, u16), Vec<u8>>,
+    pixmap_cache: HashMap<(ItemId, u16), PixmapData>,
 }
 
 impl HostState {
@@ -158,7 +158,7 @@ impl TrayHost {
     /// # Errors
     ///
     /// - [`TraydError::NotFound`] if the item or its pixmap data is absent.
-    pub async fn get_pixmap(&self, id: &ItemId, size: u16) -> Result<Vec<u8>, TraydError> {
+    pub async fn get_pixmap(&self, id: &ItemId, size: u16) -> Result<PixmapData, TraydError> {
         // Fast path: return from derived pixmap cache.
         {
             let state = self.inner.state.read().await;
@@ -168,7 +168,7 @@ impl TrayHost {
         }
 
         // Slow path: pick the best pixmap from the in-process item cache.
-        let pixmaps = {
+        let result = {
             let state = self.inner.state.read().await;
             let item = state
                 .items
@@ -183,27 +183,34 @@ impl TrayHost {
             } else {
                 &item.icon
             };
-            icon.pixmaps.clone()
+
+            if icon.pixmaps.is_empty() {
+                return Err(TraydError::NotFound(format!("no pixmap for {id}")));
+            }
+
+            // Pick the nearest size; prefer an exact match, then larger, then smaller.
+            let best = icon
+                .pixmaps
+                .iter()
+                .min_by_key(|p| (p.width - size as i32).unsigned_abs())
+                .expect("pixmaps is non-empty");
+
+            PixmapData {
+                width: best.width as u32,
+                height: best.height as u32,
+                data: best.data.clone(),
+            }
         };
-
-        if pixmaps.is_empty() {
-            return Err(TraydError::NotFound(format!("no pixmap for {id}")));
-        }
-
-        // Pick the nearest size; prefer an exact match, then larger, then smaller.
-        let best = pixmaps
-            .iter()
-            .min_by_key(|p| (p.width - size as i32).unsigned_abs())
-            .expect("pixmaps is non-empty");
-        let bytes = best.data.clone();
 
         // Memoise for subsequent calls with the same size.
         {
             let mut state = self.inner.state.write().await;
-            state.pixmap_cache.insert((id.clone(), size), bytes.clone());
+            state
+                .pixmap_cache
+                .insert((id.clone(), size), result.clone());
         }
 
-        Ok(bytes)
+        Ok(result)
     }
 
     /// Activate a tray item.

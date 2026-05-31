@@ -215,6 +215,31 @@ async fn golden_menu_response_fixture() {
 }
 
 #[tokio::test]
+async fn golden_get_pixmap_response_fixture() {
+    let resp_line = r#"{"v":1,"type":"pixmap","app_id":"org.example.App","size":22,"width":22,"height":22,"data":""}"#;
+    let resp: IpcResponse = serde_json::from_str(resp_line).unwrap();
+    match resp {
+        IpcResponse::Ok(ok) => match &ok.payload {
+            OkPayload::Pixmap {
+                app_id,
+                size,
+                width,
+                height,
+                data,
+            } => {
+                assert_eq!(app_id, "org.example.App");
+                assert_eq!(*size, 22);
+                assert_eq!(*width, 22);
+                assert_eq!(*height, 22);
+                assert_eq!(data, "");
+            }
+            other => panic!("expected Pixmap payload, got: {other:?}"),
+        },
+        IpcResponse::Err(e) => panic!("expected Ok, got error: {:?}", e.error),
+    }
+}
+
+#[tokio::test]
 async fn golden_ping_fixture() {
     let req_line = r#"{"v":1,"cmd":"ping"}"#;
     let resp_line = r#"{"v":1,"type":"pong"}"#;

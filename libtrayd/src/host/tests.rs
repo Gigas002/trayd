@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{IconData, ItemId, TrayItem, TrayStatus};
+use crate::model::{IconData, ItemId, PixmapData, TrayItem, TrayStatus};
 
 /// Build a dummy `TrayItem` for use in unit tests (no D-Bus required).
 fn dummy_item(id: &str) -> TrayItem {
@@ -128,23 +128,51 @@ fn host_state_pixmap_cache_empty_initially() {
 fn host_state_pixmap_cache_insert_and_retrieve() {
     let mut state = HostState::new();
     let id = ItemId("org.example.App".to_owned());
-    let bytes = vec![0xAA, 0xBB, 0xCC, 0xDD];
-    state.pixmap_cache.insert((id.clone(), 22), bytes.clone());
+    let pix = PixmapData {
+        width: 22,
+        height: 22,
+        data: vec![0xAA, 0xBB, 0xCC, 0xDD],
+    };
+    state.pixmap_cache.insert((id.clone(), 22), pix.clone());
 
-    let cached = state.pixmap_cache.get(&(id, 22)).cloned();
-    assert_eq!(cached, Some(bytes));
+    let cached = state.pixmap_cache.get(&(id, 22));
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().data, pix.data);
+    assert_eq!(cached.unwrap().width, 22);
+    assert_eq!(cached.unwrap().height, 22);
 }
 
 #[test]
 fn host_state_pixmap_cache_invalidation() {
     let mut state = HostState::new();
     let id = ItemId("org.example.App".to_owned());
-    state.pixmap_cache.insert((id.clone(), 16), vec![1, 2]);
-    state.pixmap_cache.insert((id.clone(), 22), vec![3, 4]);
+    state.pixmap_cache.insert(
+        (id.clone(), 16),
+        PixmapData {
+            width: 16,
+            height: 16,
+            data: vec![1, 2],
+        },
+    );
+    state.pixmap_cache.insert(
+        (id.clone(), 22),
+        PixmapData {
+            width: 22,
+            height: 22,
+            data: vec![3, 4],
+        },
+    );
 
     // A different item's entry must survive.
     let other = ItemId("org.other.App".to_owned());
-    state.pixmap_cache.insert((other.clone(), 22), vec![5, 6]);
+    state.pixmap_cache.insert(
+        (other.clone(), 22),
+        PixmapData {
+            width: 22,
+            height: 22,
+            data: vec![5, 6],
+        },
+    );
 
     state.invalidate_pixmap_cache(&id);
 

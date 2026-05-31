@@ -7,7 +7,9 @@ pub mod model;
 
 pub use error::TraydError;
 pub use host::TrayHost;
-pub use model::{HostEvent, IconData, IconPixmap, ItemId, MenuNode, TrayItem, TrayStatus};
+pub use model::{
+    HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, TrayItem, TrayStatus,
+};
 
 /// Library version (matches workspace package version at release time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -82,6 +82,19 @@ pub struct IconPixmap {
     pub data: Vec<u8>,
 }
 
+/// Raw pixmap data returned by [`crate::host::TrayHost::get_pixmap`].
+///
+/// Bytes are ARGB32 in big-endian byte order (per the SNI specification).
+#[derive(Debug, Clone)]
+pub struct PixmapData {
+    /// Actual pixel width of the returned pixmap.
+    pub width: u32,
+    /// Actual pixel height of the returned pixmap.
+    pub height: u32,
+    /// Raw ARGB32 bytes (`width × height × 4`).
+    pub data: Vec<u8>,
+}
+
 /// Icon state for a tray item: either a theme icon name, raw pixmaps, or both.
 #[derive(Debug, Clone, Default)]
 pub struct IconData {
