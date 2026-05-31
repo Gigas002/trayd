@@ -11,7 +11,38 @@ Minimal Wayland-session system tray daemon (`zbus`) with a documented IPC socket
 | `trayctl`  | One-shot menu orchestrator (IPC client + dmenu bridge)         |
 | `tray-tui` | Terminal UI client (IPC socket only)                           |
 
-See [`docs/PLAN.md`](docs/PLAN.md) for the architecture and [`docs/IPC.md`](docs/IPC.md) for the wire protocol.
+See [`docs/IPC.md`](docs/IPC.md) for the wire protocol.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph session["Wayland session"]
+    Apps["Tray apps\n(SNI on D-Bus)"]
+    trayd["trayd\n(daemon)"]
+    client["bar / TUI client"]
+    trayctl["trayctl\n(one-shot)"]
+    traytui["tray-tui\n(on-demand)"]
+    dmenu["tofi / rofi\n(--mode dmenu)"]
+  end
+  Apps <-->|zbus| trayd
+  client <-->|IPC subscribe + pixmaps| trayd
+  traytui <-->|IPC| trayd
+  trayctl <-->|IPC get_menu / activate| trayd
+  client -->|spawn on click| trayctl
+  client -->|spawn on click| traytui
+  trayctl -->|spawn per submenu level| dmenu
+```
+
+| Component    | Role                                     | Lifecycle              | Spawns?                      |
+| ------------ | ---------------------------------------- | ---------------------- | ---------------------------- |
+| **trayd**    | SNI watcher, icon/menu cache, IPC server | Persistent daemon      | **Never**                    |
+| **libtrayd** | D-Bus + in-memory `TrayHost` (library)   | Linked only by `trayd` | —                            |
+| **trayctl**  | IPC → dmenu stdin/stdout bridge          | One-shot per click     | dmenu tool per submenu level |
+| **tray-tui** | ratatui terminal UI over IPC             | On-demand              | **Never**                    |
+| **client**   | Any consumer of the IPC socket           | Any                    | User-defined                 |
 
 ---
 
@@ -135,6 +166,29 @@ trayd --socket /tmp/my.sock
 trayctl --socket /tmp/my.sock items
 trayctl --socket /tmp/my.sock menu --app-id org.example.App
 tray-tui --socket /tmp/my.sock
+```
+
+### 6. Run trayd as a systemd user service
+
+Create `~/.config/systemd/user/trayd.service`:
+
+```ini
+[Unit]
+Description=trayd system tray daemon
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/trayd run
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+Then enable and start it:
+
+```sh
+systemctl --user enable --now trayd
 ```
 
 ---
