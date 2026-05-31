@@ -1,2 +1,2 @@
 {"v":1,"cmd":"get_pixmap","app_id":"org.example.App","size":22}
-{"v":1,"type":"pixmap","app_id":"org.example.App","size":22,"data":""}
+{"v":1,"type":"pixmap","app_id":"org.example.App","size":22,"width":22,"height":22,"data":""}

@@ -1,4 +1,4 @@
-//! XDG `trayd.toml` (Phase 2+).
+//! XDG `trayd.toml` config loader.
 
 use std::path::{Path, PathBuf};
 

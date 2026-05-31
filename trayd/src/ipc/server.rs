@@ -4,7 +4,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 
-use libtrayd::{ItemId, TrayHost, TraydError};
+use libtrayd::{ItemId, PixmapData, TrayHost, TraydError};
 
 use crate::error::TraydBinError;
 use crate::ipc::codec;
@@ -111,7 +111,11 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
         Cmd::GetPixmap { app_id, size } => {
             let id = ItemId::from(app_id.clone());
             let resp = match host.get_pixmap(&id, size as u16).await {
-                Ok(bytes) => {
+                Ok(PixmapData {
+                    width,
+                    height,
+                    data: bytes,
+                }) => {
                     let enc_len = base64_ng::STANDARD.encoded_len(bytes.len()).unwrap_or(0);
                     let mut buf = vec![0u8; enc_len];
                     let n = base64_ng::STANDARD
@@ -119,7 +123,13 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
                         .unwrap_or(0);
                     // SAFETY: base64 output is always ASCII
                     let data = String::from_utf8(buf[..n].to_vec()).unwrap_or_default();
-                    IpcResponse::ok(OkPayload::Pixmap { app_id, size, data })
+                    IpcResponse::ok(OkPayload::Pixmap {
+                        app_id,
+                        size,
+                        width,
+                        height,
+                        data,
+                    })
                 }
                 Err(TraydError::NotFound(_)) => {
                     IpcResponse::err(ErrorCode::NotFound, format!("{app_id} not found"))
@@ -136,9 +146,14 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
     }
 }
 
+/// Coalescing window: after the first event arrives, collect further events
+/// for this long before emitting a single snapshot to the subscriber.
+const COALESCE_MS: u64 = 50;
+
 async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost) {
     let mut events_rx = host.subscribe();
 
+    // Send the initial full snapshot immediately.
     let initial = IpcResponse::ok(OkPayload::Event {
         event: TrayEvent::Update(items_snapshot(host).await),
     });
@@ -147,21 +162,50 @@ async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost)
     }
 
     loop {
+        // Wait for the first event.
         match events_rx.recv().await {
-            Ok(_) | Err(RecvError::Lagged(_)) => {
-                let resp = IpcResponse::ok(OkPayload::Event {
-                    event: TrayEvent::Update(items_snapshot(host).await),
-                });
-                if codec::write_response(write, &resp).await.is_err() {
-                    return;
+            Ok(_) | Err(RecvError::Lagged(_)) => {}
+            Err(RecvError::Closed) => return,
+        }
+
+        // Coalesce: drain any events that arrive within the window.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(COALESCE_MS);
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => break,
+                next = events_rx.recv() => match next {
+                    Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => {
+                        // Send one final update before exiting.
+                        let resp = IpcResponse::ok(OkPayload::Event {
+                            event: TrayEvent::Update(items_snapshot(host).await),
+                        });
+                        let _ = codec::write_response(write, &resp).await;
+                        return;
+                    }
                 }
             }
-            Err(RecvError::Closed) => return,
+        }
+
+        // Emit one coalesced snapshot.
+        let resp = IpcResponse::ok(OkPayload::Event {
+            event: TrayEvent::Update(items_snapshot(host).await),
+        });
+        if codec::write_response(write, &resp).await.is_err() {
+            return;
         }
     }
 }
 
 fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
+    // For items needing attention, prefer the attention icon name when available.
+    let icon_handle = if item.status == libtrayd::TrayStatus::NeedsAttention {
+        item.attention_icon
+            .as_handle()
+            .or_else(|| item.icon.as_handle())
+    } else {
+        item.icon.as_handle()
+    };
     MinimalTrayItem {
         app_id: item.id.to_string(),
         title: if item.title.is_empty() {
@@ -170,7 +214,7 @@ fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
             Some(item.title.clone())
         },
         status: item.status.to_string(),
-        icon_handle: item.icon.as_handle(),
+        icon_handle,
     }
 }
 

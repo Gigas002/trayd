@@ -15,7 +15,7 @@ pub enum TraydError {
     #[error("activation failed for {app_id}: {reason}")]
     ActivationFailed { app_id: String, reason: String },
 
-    /// Operation not yet implemented (Phase 3+).
+    /// Operation not yet implemented.
     #[error("not implemented yet")]
     NotImplemented,
 }

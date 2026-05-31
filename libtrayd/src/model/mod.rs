@@ -82,6 +82,19 @@ pub struct IconPixmap {
     pub data: Vec<u8>,
 }
 
+/// Raw pixmap data returned by [`crate::host::TrayHost::get_pixmap`].
+///
+/// Bytes are ARGB32 in big-endian byte order (per the SNI specification).
+#[derive(Debug, Clone)]
+pub struct PixmapData {
+    /// Actual pixel width of the returned pixmap.
+    pub width: u32,
+    /// Actual pixel height of the returned pixmap.
+    pub height: u32,
+    /// Raw ARGB32 bytes (`width × height × 4`).
+    pub data: Vec<u8>,
+}
+
 /// Icon state for a tray item: either a theme icon name, raw pixmaps, or both.
 #[derive(Debug, Clone, Default)]
 pub struct IconData {
@@ -111,8 +124,6 @@ impl IconData {
 // ─── MenuNode ────────────────────────────────────────────────────────────────
 
 /// One node in a DBusMenu tree (flattened snapshot; children fetched on demand).
-///
-/// Full tree traversal is implemented in Phase 3.
 #[derive(Debug, Clone)]
 pub struct MenuNode {
     /// DBusMenu item id.
@@ -127,7 +138,7 @@ pub struct MenuNode {
     pub icon_name: String,
     /// `true` when this node represents a submenu (children not yet fetched).
     pub is_submenu: bool,
-    /// Direct children (populated on demand in Phase 3).
+    /// Direct children (populated on demand).
     pub children: Vec<MenuNode>,
 }
 
@@ -148,6 +159,8 @@ pub struct TrayItem {
     pub status: TrayStatus,
     /// Normal icon data.
     pub icon: IconData,
+    /// Attention icon data — shown when `status == NeedsAttention`.
+    pub attention_icon: IconData,
     /// D-Bus object path for the associated DBusMenu object (`""` if absent).
     pub menu_path: String,
 }

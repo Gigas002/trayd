@@ -1,4 +1,4 @@
-//! Submenu loop: IPC `get_menu` → stdin lines → dmenu stdout → `activate` (Phase 3).
+//! Submenu loop: IPC `get_menu` → stdin lines → dmenu stdout → `activate`.
 
 use std::process::Stdio;
 

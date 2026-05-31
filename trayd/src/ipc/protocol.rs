@@ -93,7 +93,13 @@ pub enum OkPayload {
     Ack,
     Pixmap {
         app_id: String,
+        /// Requested size (from the `get_pixmap` command).
         size: u32,
+        /// Actual pixel width of the returned pixmap surface.
+        width: u32,
+        /// Actual pixel height of the returned pixmap surface.
+        height: u32,
+        /// Base64-encoded ARGB32 bytes (`width × height × 4`).
         data: String,
     },
 }

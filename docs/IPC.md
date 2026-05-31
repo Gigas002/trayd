@@ -8,7 +8,7 @@
 
 ## Consumers
 
-**abar**, **trayctl**, **tray-tui**, and shell scripts talk to trayd via this socket only. They do **not** link `libtrayd` or the `trayd` crate; they duplicate wire types locally per this document.
+Any process can connect to `$XDG_RUNTIME_DIR/trayd.sock` and speak this protocol — bars, TUIs, scripts, or custom tools. No dependency on `libtrayd` is required; the wire types are small enough to duplicate locally. `libtrayd` is also available as a standalone library if you want to embed the SNI host directly rather than talk to a running daemon.
 
 ---
 
@@ -20,14 +20,14 @@ Every request is a JSON object on one line:
 {"v":1,"cmd":"<command>"[, ...args]}
 ```
 
-| `cmd`        | Extra fields                                   | Callers                       |
-| ------------ | ---------------------------------------------- | ----------------------------- |
-| `ping`       | —                                              | any                           |
-| `subscribe`  | —                                              | abar, tray-tui                |
-| `get_items`  | —                                              | trayctl, scripts              |
-| `get_menu`   | `"app_id": string`, `"submenu_id": int\|null`  | trayctl, tray-tui             |
-| `activate`   | `"app_id": string`, `"item_id": int`           | trayctl, tray-tui             |
-| `get_pixmap` | `"app_id": string`, `"size": int`              | abar                          |
+| `cmd`        | Extra fields                                  | Typical callers                   |
+| ------------ | --------------------------------------------- | --------------------------------- |
+| `ping`       | —                                             | any                               |
+| `subscribe`  | —                                             | persistent consumers (bars, TUIs) |
+| `get_items`  | —                                             | one-shot consumers, scripts       |
+| `get_menu`   | `"app_id": string`, `"submenu_id": int\|null` | menu consumers                    |
+| `activate`   | `"app_id": string`, `"item_id": int`          | menu consumers                    |
+| `get_pixmap` | `"app_id": string`, `"size": int`             | icon-rendering consumers          |
 
 ---
 
@@ -39,14 +39,14 @@ Every request is a JSON object on one line:
 {"v":1,"type":"<type>"[, ...fields]}
 ```
 
-| `type`    | Extra fields                                         | Sent in reply to          |
-| --------- | ---------------------------------------------------- | ------------------------- |
-| `pong`    | —                                                    | `ping`                    |
-| `items`   | `"items": MinimalTrayItem[]`                         | `get_items`               |
-| `event`   | `"event": TrayEvent`                                 | `subscribe` (stream)      |
-| `menu`    | `"app_id": string`, `"items": MenuItem[]`            | `get_menu`                |
-| `ack`     | —                                                    | `activate`                |
-| `pixmap`  | `"app_id": string`, `"size": int`, `"data": string`  | `get_pixmap`              |
+| `type`   | Extra fields                                                                         | Sent in reply to     |
+| -------- | ------------------------------------------------------------------------------------ | -------------------- |
+| `pong`   | —                                                                                    | `ping`               |
+| `items`  | `"items": MinimalTrayItem[]`                                                         | `get_items`          |
+| `event`  | `"event": TrayEvent`                                                                 | `subscribe` (stream) |
+| `menu`   | `"app_id": string`, `"items": MenuItem[]`                                            | `get_menu`           |
+| `ack`    | —                                                                                    | `activate`           |
+| `pixmap` | `"app_id": string`, `"size": int`, `"width": int`, `"height": int`, `"data": string` | `get_pixmap`         |
 
 ### Error
 
@@ -54,12 +54,12 @@ Every request is a JSON object on one line:
 {"v":1,"error":{"code":"<CODE>","message":"..."}}
 ```
 
-| `code`          | Meaning                                   |
-| --------------- | ----------------------------------------- |
-| `NOT_FOUND`     | `app_id` not registered                   |
-| `BUS_FAILED`    | D-Bus communication failed                |
-| `INVALID_APP_ID`| Malformed `app_id`                        |
-| `NOT_IMPLEMENTED`| Feature not yet available               |
+| `code`            | Meaning                    |
+| ----------------- | -------------------------- |
+| `NOT_FOUND`       | `app_id` not registered    |
+| `BUS_FAILED`      | D-Bus communication failed |
+| `INVALID_APP_ID`  | Malformed `app_id`         |
+| `NOT_IMPLEMENTED` | Feature not yet available  |
 
 ---
 
@@ -71,30 +71,30 @@ Every request is a JSON object on one line:
 {
   "app_id": "org.example.App",
   "title": "Example App",
-  "status": "active",
+  "status": "Active",
   "icon_handle": "example-app"
 }
 ```
 
 `title` and `icon_handle` are omitted when `null`.
 
-| Field         | Type             | Notes                        |
-| ------------- | ---------------- | ---------------------------- |
-| `app_id`      | string           | stable SNI registration id   |
-| `title`       | string \| absent | display name                 |
-| `status`      | string           | `"active"`, `"passive"`, `"needs_attention"` |
-| `icon_handle` | string \| absent | theme icon name or handle    |
+| Field         | Type             | Notes                                       |
+| ------------- | ---------------- | ------------------------------------------- |
+| `app_id`      | string           | stable SNI registration id                  |
+| `title`       | string \| absent | display name                                |
+| `status`      | string           | `"Active"`, `"Passive"`, `"NeedsAttention"` |
+| `icon_handle` | string \| absent | theme icon name or handle                   |
 
 ### `MenuItem`
 
 ```json
-{"item_id": 1, "label": "Action", "is_submenu": false}
+{ "item_id": 1, "label": "Action", "is_submenu": false }
 ```
 
-| Field        | Type    | Notes                               |
-| ------------ | ------- | ----------------------------------- |
-| `item_id`    | integer | stable row id within this menu      |
-| `label`      | string  | display text                        |
+| Field        | Type    | Notes                                                                      |
+| ------------ | ------- | -------------------------------------------------------------------------- |
+| `item_id`    | integer | stable row id within this menu                                             |
+| `label`      | string  | display text                                                               |
 | `is_submenu` | bool    | `true` → has children; send `get_menu` with this `item_id` as `submenu_id` |
 
 ### `TrayEvent`
@@ -104,6 +104,28 @@ Every request is a JSON object on one line:
 ```
 
 Currently only `"kind": "update"` exists; carries the full current item list.
+
+### `PixmapResponse`
+
+Returned by `get_pixmap`.
+
+```json
+{
+  "app_id": "org.example.App",
+  "size": 22,
+  "width": 22,
+  "height": 22,
+  "data": "<base64>"
+}
+```
+
+| Field    | Type    | Notes                                                                                      |
+| -------- | ------- | ------------------------------------------------------------------------------------------ |
+| `app_id` | string  | echoed from the request                                                                    |
+| `size`   | integer | requested size (pixels)                                                                    |
+| `width`  | integer | actual pixel width of the returned surface                                                 |
+| `height` | integer | actual pixel height of the returned surface                                                |
+| `data`   | string  | base64-encoded ARGB32 bytes (`width × height × 4`) in big-endian byte order (per SNI spec) |
 
 ---
 
@@ -135,7 +157,7 @@ Golden request/response pairs live under `examples/ipc-examples/*.jsonl` — fir
 
 ```
 {"v":1,"cmd":"get_items"}
-{"v":1,"type":"items","items":[{"app_id":"org.example.App","title":"Example App","status":"active","icon_handle":"example-app"}]}
+{"v":1,"type":"items","items":[{"app_id":"org.example.App","title":"Example App","status":"Active","icon_handle":"example-app"}]}
 ```
 
 ### `get_menu` (top-level)
@@ -163,7 +185,7 @@ Golden request/response pairs live under `examples/ipc-examples/*.jsonl` — fir
 
 ```
 {"v":1,"cmd":"get_pixmap","app_id":"org.example.App","size":22}
-{"v":1,"type":"pixmap","app_id":"org.example.App","size":22,"data":""}
+{"v":1,"type":"pixmap","app_id":"org.example.App","size":22,"width":22,"height":22,"data":""}
 ```
 
 ### Error

@@ -1,6 +1,6 @@
-//! `com.canonical.dbusmenu` D-Bus client proxy.
+//! `com.canonical.dbusmenu` client proxy.
 //!
-//! Phase 3 adds `get_layout` for full menu tree traversal.
+//! `get_layout` is used for full menu tree traversal.
 
 use std::collections::HashMap;
 
