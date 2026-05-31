@@ -376,7 +376,7 @@ When a phase is marked complete:
 
 ### Phase 5 — Pixmap hardening + performance
 
-- [ ] Cache, attention icons, coalesced `subscribe` updates.
+- [x] Cache, attention icons, coalesced `subscribe` updates.
 
 ### Phase 6 — abar integration (trayd side)
 

@@ -148,6 +148,8 @@ pub struct TrayItem {
     pub status: TrayStatus,
     /// Normal icon data.
     pub icon: IconData,
+    /// Attention icon data — shown when `status == NeedsAttention`.
+    pub attention_icon: IconData,
     /// D-Bus object path for the associated DBusMenu object (`""` if absent).
     pub menu_path: String,
 }
