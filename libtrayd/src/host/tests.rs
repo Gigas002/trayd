@@ -1,6 +1,57 @@
 use super::*;
 use crate::model::{IconData, ItemId, PixmapData, TrayItem, TrayStatus};
 
+// ─── resolve_icon_name ────────────────────────────────────────────────────────────────
+
+#[test]
+fn resolve_icon_name_explicit_icon_name_wins() {
+    // When `IconName` is set it should always be used, regardless of the other sources.
+    assert_eq!(
+        resolve_icon_name(
+            "nm-device-wired".to_owned(),
+            Some("org.example.App"),
+            "ExampleApp".to_owned(),
+        ),
+        "nm-device-wired",
+    );
+}
+
+#[test]
+fn resolve_icon_name_falls_back_to_well_known() {
+    // When `IconName` is empty, the well-known bus name is used (Telegram case).
+    assert_eq!(
+        resolve_icon_name(
+            String::new(),
+            Some("org.telegram.desktop"),
+            "TelegramDesktop".to_owned(),
+        ),
+        "org.telegram.desktop",
+    );
+}
+
+#[test]
+fn resolve_icon_name_falls_back_to_sni_id() {
+    // When both `IconName` and well-known name are absent, the SNI `Id` is used.
+    assert_eq!(
+        resolve_icon_name(String::new(), None, "SomeApp".to_owned(),),
+        "SomeApp",
+    );
+}
+
+#[test]
+fn resolve_icon_name_empty_well_known_skipped() {
+    // An empty well-known name string should not be returned; fall through to SNI `Id`.
+    assert_eq!(
+        resolve_icon_name(String::new(), Some(""), "FallbackId".to_owned()),
+        "FallbackId",
+    );
+}
+
+#[test]
+fn resolve_icon_name_all_empty_returns_empty() {
+    assert_eq!(resolve_icon_name(String::new(), None, String::new()), "",);
+}
+
 /// Build a dummy `TrayItem` for use in unit tests (no D-Bus required).
 fn dummy_item(id: &str) -> TrayItem {
     TrayItem {

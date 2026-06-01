@@ -557,6 +557,25 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
 
 // ─── Property fetch helper ────────────────────────────────────────────────────
 
+/// Select the best icon name from the three available sources.
+///
+/// Priority: explicit `IconName` SNI property → well-known bus name of the
+/// owning process (e.g. `org.telegram.desktop`) → SNI `Id` as a last resort
+/// (e.g. `TelegramDesktop`).
+pub(crate) fn resolve_icon_name(
+    icon_name: String,
+    well_known_name: Option<&str>,
+    sni_id: String,
+) -> String {
+    if !icon_name.is_empty() {
+        icon_name
+    } else if let Some(wkn) = well_known_name.filter(|s| !s.is_empty()) {
+        wkn.to_owned()
+    } else {
+        sni_id
+    }
+}
+
 async fn fetch_item_properties(
     proxy: &StatusNotifierItemProxy<'_>,
     service_id: &str,
@@ -569,13 +588,11 @@ async fn fetch_item_properties(
     let icon_name = proxy.icon_name().await.unwrap_or_default();
     // Priority: explicit `IconName` → well-known bus name (e.g. `org.telegram.desktop`)
     // → SNI `Id` as a last resort (e.g. `TelegramDesktop`).
-    let icon_name = if !icon_name.is_empty() {
-        icon_name
-    } else if let Some(wkn) = well_known_name.filter(|s| !s.is_empty()) {
-        wkn.to_owned()
-    } else {
-        proxy.id().await.unwrap_or_default()
-    };
+    let icon_name = resolve_icon_name(
+        icon_name,
+        well_known_name,
+        proxy.id().await.unwrap_or_default(),
+    );
     let raw_pixmaps = proxy.icon_pixmap().await.unwrap_or_default();
     let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_default();
     let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_default();
@@ -708,17 +725,15 @@ async fn on_icon_changed(
         proxy.attention_icon_name().await.unwrap_or_default()
     } else {
         let name = proxy.icon_name().await.unwrap_or_default();
-        if name.is_empty() {
-            // Re-apply the same fallback used at registration time so that a
-            // `NewIcon` signal can't clobber the resolved well-known name.
-            if let Some(wkn) = lookup_well_known_name(&inner.conn, bus_name).await {
-                wkn
-            } else {
-                proxy.id().await.unwrap_or_default()
-            }
-        } else {
-            name
-        }
+        // Re-apply the same fallback used at registration time so that a
+        // `NewIcon` signal can't clobber the resolved well-known name.
+        resolve_icon_name(
+            name,
+            lookup_well_known_name(&inner.conn, bus_name)
+                .await
+                .as_deref(),
+            proxy.id().await.unwrap_or_default(),
+        )
     };
     let raw = if attention {
         proxy.attention_icon_pixmap().await.unwrap_or_default()
