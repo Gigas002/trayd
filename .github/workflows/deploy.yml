@@ -16,8 +16,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  github-release-trayd:
-    name: GitHub Release
+  build-trayd:
+    name: Build trayd
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -27,29 +27,23 @@ jobs:
       - name: Build cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary (trayd)
+      - name: Build release binary
         run: cargo build -p trayd --release
 
-      - name: Strip binary
-        run: strip target/release/trayd
-
-      - name: Package archive
+      - name: Strip and package
         run: |
+          strip target/release/trayd
           VERSION="${GITHUB_REF_NAME:-dev}"
-          ARCHIVE="trayd-${VERSION}-x86_64-linux.tar.gz"
-          tar -czf "$ARCHIVE" -C target/release trayd
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          tar -czf "trayd-${VERSION}-x86_64-linux.tar.gz" -C target/release trayd
 
-      # Only runs on real tag pushes; skipped for workflow_dispatch.
-      - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v3
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ARCHIVE }}
-          generate_release_notes: true
+          name: trayd
+          path: trayd-*.tar.gz
 
-  github-release-trayctl:
-    name: GitHub Release (trayctl)
+  build-trayctl:
+    name: Build trayctl
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -59,28 +53,23 @@ jobs:
       - name: Build cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary (trayctl)
+      - name: Build release binary
         run: cargo build -p trayctl --release
 
-      - name: Strip binary
-        run: strip target/release/trayctl
-
-      - name: Package archive
+      - name: Strip and package
         run: |
+          strip target/release/trayctl
           VERSION="${GITHUB_REF_NAME:-dev}"
-          ARCHIVE="trayctl-${VERSION}-x86_64-linux.tar.gz"
-          tar -czf "$ARCHIVE" -C target/release trayctl
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          tar -czf "trayctl-${VERSION}-x86_64-linux.tar.gz" -C target/release trayctl
 
-      - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v3
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ARCHIVE }}
-          generate_release_notes: true
+          name: trayctl
+          path: trayctl-*.tar.gz
 
-  github-release-tray-tui:
-    name: GitHub Release (tray-tui)
+  build-tray-tui:
+    name: Build tray-tui
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -90,31 +79,43 @@ jobs:
       - name: Build cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary (tray-tui)
+      - name: Build release binary
         run: cargo build -p tray-tui --release
 
-      - name: Strip binary
-        run: strip target/release/tray-tui
-
-      - name: Package archive
+      - name: Strip and package
         run: |
+          strip target/release/tray-tui
           VERSION="${GITHUB_REF_NAME:-dev}"
-          ARCHIVE="tray-tui-${VERSION}-x86_64-linux.tar.gz"
-          tar -czf "$ARCHIVE" -C target/release tray-tui
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          tar -czf "tray-tui-${VERSION}-x86_64-linux.tar.gz" -C target/release tray-tui
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tray-tui
+          path: tray-tui-*.tar.gz
+
+  github-release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-trayd, build-trayctl, build-tray-tui]
+    if: github.event_name == 'push'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Create GitHub Release
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ env.ARCHIVE }}
+          files: "*.tar.gz"
           generate_release_notes: true
 
   # Requires the CARGO_REGISTRY_TOKEN secret — see README for setup.
   publish-crates-io:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: github-release-trayd
+    needs: github-release
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v6
