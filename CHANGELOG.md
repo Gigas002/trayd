@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-02
+
+### Fixed
+
+- **`trayctl` / `libtrayd`**: icon handle now resolves correctly for apps (e.g. Telegram) that
+  leave the SNI `IconName` property empty and register on the session bus under a well-known
+  name different from their SNI connection. The lookup walks `org.freedesktop.DBus.ListNames`
+  and matches by Unix PID, mapping e.g. `:1.201` → `org.telegram.desktop`. Fallback order:
+  `IconName` → well-known bus name → SNI `Id`.
+- **`trayctl`**: tracing logs now go to `stderr` instead of `stdout`, keeping JSON output
+  on `stdout` clean for piping and parsing.
+
 ## [0.1.0] - 2026-05-31
 
 ### Added

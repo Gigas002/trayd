@@ -807,7 +807,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libtrayd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror 2.0.18",
  "tokio",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "tray-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "crossterm",
@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "trayctl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "serde",
@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "trayd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64-ng",
  "clap",
