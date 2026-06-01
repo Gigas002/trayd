@@ -340,10 +340,9 @@ async fn lookup_well_known_name(conn: &zbus::Connection, unique_name: &str) -> O
         if let Ok(pid) = fdo
             .get_connection_unix_process_id((*owned_name).clone())
             .await
+            && pid == our_pid
         {
-            if pid == our_pid {
-                return Some(s);
-            }
+            return Some(s);
         }
     }
     None
