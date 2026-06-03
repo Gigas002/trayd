@@ -37,7 +37,7 @@ jobs:
           tar -czf "trayd-${VERSION}-x86_64-linux.tar.gz" -C target/release trayd
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trayd
           path: trayd-*.tar.gz
@@ -63,7 +63,7 @@ jobs:
           tar -czf "trayctl-${VERSION}-x86_64-linux.tar.gz" -C target/release trayctl
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trayctl
           path: trayctl-*.tar.gz
@@ -89,7 +89,7 @@ jobs:
           tar -czf "tray-tui-${VERSION}-x86_64-linux.tar.gz" -C target/release tray-tui
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tray-tui
           path: tray-tui-*.tar.gz
