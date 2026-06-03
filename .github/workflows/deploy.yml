@@ -19,6 +19,8 @@ jobs:
   build-trayd:
     name: Build trayd
     runs-on: ubuntu-latest
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v6
 
@@ -37,14 +39,17 @@ jobs:
           tar -czf "trayd-${VERSION}-x86_64-linux.tar.gz" -C target/release trayd
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        id: upload
+        uses: actions/upload-artifact@v7
         with:
-          name: trayd
+          archive: false
           path: trayd-*.tar.gz
 
   build-trayctl:
     name: Build trayctl
     runs-on: ubuntu-latest
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v6
 
@@ -63,14 +68,17 @@ jobs:
           tar -czf "trayctl-${VERSION}-x86_64-linux.tar.gz" -C target/release trayctl
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        id: upload
+        uses: actions/upload-artifact@v7
         with:
-          name: trayctl
+          archive: false
           path: trayctl-*.tar.gz
 
   build-tray-tui:
     name: Build tray-tui
     runs-on: ubuntu-latest
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v6
 
@@ -89,9 +97,10 @@ jobs:
           tar -czf "tray-tui-${VERSION}-x86_64-linux.tar.gz" -C target/release tray-tui
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        id: upload
+        uses: actions/upload-artifact@v7
         with:
-          name: tray-tui
+          archive: false
           path: tray-tui-*.tar.gz
 
   github-release:
@@ -100,9 +109,10 @@ jobs:
     needs: [build-trayd, build-trayctl, build-tray-tui]
     if: github.event_name == 'push'
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
         with:
+          artifact-ids: ${{ needs.build-trayd.outputs.artifact-id }},${{ needs.build-trayctl.outputs.artifact-id }},${{ needs.build-tray-tui.outputs.artifact-id }}
           merge-multiple: true
 
       - name: Create GitHub Release
