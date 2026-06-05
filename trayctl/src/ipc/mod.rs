@@ -23,6 +23,7 @@ struct Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 enum Cmd {
+    Subscribe,
     GetMenu {
         app_id: String,
         submenu_id: Option<u32>,
@@ -75,6 +76,15 @@ pub enum Payload {
         items: Vec<MinimalTrayItem>,
     },
     Pong,
+    Event {
+        event: TrayEvent,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", content = "items", rename_all = "snake_case")]
+pub enum TrayEvent {
+    Update(Vec<MinimalTrayItem>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +165,30 @@ impl IpcClient {
                 payload: Payload::Ack,
                 ..
             }) => Ok(()),
+            Response::Ok(ok) => Err(CtlError::Ipc(format!("unexpected response: {ok:?}"))),
+            Response::Err(e) => Err(CtlError::Ipc(format!(
+                "{}: {}",
+                e.error.code, e.error.message
+            ))),
+        }
+    }
+
+    /// Send a `subscribe` request. Call [`Self::recv_event`] in a loop after this.
+    pub async fn subscribe(&mut self) -> Result<(), CtlError> {
+        let req = Request {
+            v: 1,
+            cmd: Cmd::Subscribe,
+        };
+        self.send(&req).await
+    }
+
+    /// Read one [`TrayEvent`] from the subscribe stream.
+    pub async fn recv_event(&mut self) -> Result<TrayEvent, CtlError> {
+        match self.recv().await? {
+            Response::Ok(OkResponse {
+                payload: Payload::Event { event },
+                ..
+            }) => Ok(event),
             Response::Ok(ok) => Err(CtlError::Ipc(format!("unexpected response: {ok:?}"))),
             Response::Err(e) => Err(CtlError::Ipc(format!(
                 "{}: {}",

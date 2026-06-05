@@ -1,4 +1,4 @@
-use super::{Cmd, Payload, Request, Response};
+use super::{Cmd, Payload, Request, Response, TrayEvent};
 
 #[test]
 fn get_menu_request_serializes() {
@@ -96,6 +96,34 @@ fn items_response_deserializes() {
         Response::Ok(ok) => match ok.payload {
             Payload::Items { items } => assert_eq!(items.len(), 1),
             other => panic!("expected Items payload, got {other:?}"),
+        },
+        Response::Err(e) => panic!("expected Ok, got error: {:?}", e.error),
+    }
+}
+
+#[test]
+fn subscribe_request_serializes() {
+    let req = Request {
+        v: 1,
+        cmd: Cmd::Subscribe,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(json.contains(r#""cmd":"subscribe""#), "got: {json}");
+}
+
+#[test]
+fn event_response_deserializes() {
+    let json = r#"{"v":1,"type":"event","event":{"kind":"update","items":[{"app_id":"org.example.App","status":"Active"}]}}"#;
+    let resp: Response = serde_json::from_str(json).unwrap();
+    match resp {
+        Response::Ok(ok) => match ok.payload {
+            Payload::Event {
+                event: TrayEvent::Update(items),
+            } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].app_id, "org.example.App");
+            }
+            other => panic!("expected Event payload, got {other:?}"),
         },
         Response::Err(e) => panic!("expected Ok, got error: {:?}", e.error),
     }

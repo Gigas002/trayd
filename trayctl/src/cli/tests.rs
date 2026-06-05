@@ -54,3 +54,10 @@ fn menu_default_dmenu_cmd() {
         Command::Menu { ref dmenu_cmd, .. } if dmenu_cmd == "tofi --mode dmenu"
     ));
 }
+
+#[test]
+fn subscribe_cli_parses() {
+    let cli = Cli::try_parse_from(["trayctl", "subscribe"]).expect("parse");
+    assert!(matches!(cli.command, Command::Subscribe));
+    assert!(cli.socket.is_none());
+}
