@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::error::CtlError;
-use crate::ipc::IpcClient;
+use crate::ipc::{IpcClient, TrayEvent};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,6 +33,8 @@ pub enum Command {
     },
     /// Print tray items (`get_items`) as JSON — useful for scripts.
     Items,
+    /// Stream tray-state change events as NDJSON until the daemon closes the connection.
+    Subscribe,
 }
 
 impl Cli {
@@ -52,6 +54,20 @@ impl Cli {
                 let json = serde_json::to_string_pretty(&items).map_err(CtlError::Json)?;
                 println!("{json}");
                 Ok(())
+            }
+            Command::Subscribe => {
+                tracing::debug!("trayctl subscribe");
+                client.subscribe().await?;
+                loop {
+                    match client.recv_event().await {
+                        Ok(TrayEvent::Update(items)) => {
+                            let json = serde_json::to_string(&items).map_err(CtlError::Json)?;
+                            println!("{json}");
+                        }
+                        Err(CtlError::DaemonUnreachable(_)) => return Ok(()),
+                        Err(e) => return Err(e),
+                    }
+                }
             }
         }
     }

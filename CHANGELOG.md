@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`trayctl subscribe`**: built-in CLI alternative to subscribing via the socket directly. Sends
+  a `subscribe` request and streams tray-state updates as NDJSON to stdout — one line per event,
+  each line a JSON array of `MinimalTrayItem` objects. Exits cleanly when the daemon closes the
+  connection. The raw socket `subscribe` command remains fully supported for custom clients.
+
 ## [0.1.1] - 2026-06-02
 
 ### Fixed
