@@ -45,7 +45,7 @@ jobs:
         run: |
           cargo llvm-cov --all-features -p tray-tui --lcov --output-path lcov-tray-tui.info
       - name: Upload libtrayd coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-libtrayd.info
           flags: libtrayd
@@ -55,7 +55,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload trayd coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-trayd.info
           flags: trayd
@@ -65,7 +65,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload trayctl coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-trayctl.info
           flags: trayctl
@@ -75,7 +75,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload tray-tui coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./lcov-tray-tui.info
           flags: tray-tui
