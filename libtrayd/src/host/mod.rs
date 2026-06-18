@@ -15,7 +15,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{RwLock, broadcast, mpsc, Mutex};
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
@@ -63,6 +63,10 @@ struct TrayHostInner {
     state: RwLock<HostState>,
     events_tx: broadcast::Sender<HostEvent>,
     conn: zbus::Connection,
+    /// Shared with watcher so `handle_name_owner_changed` can clean
+    /// the D-Bus-facing `RegisteredStatusNotifierItems` list and emit
+    /// `StatusNotifierItemUnregistered` signals.
+    watcher_items: Arc<Mutex<Vec<String>>>,
 }
 
 // ─── TrayHost ─────────────────────────────────────────────────────────────────
@@ -89,6 +93,9 @@ impl TrayHost {
         let (watcher_tx, watcher_rx) = mpsc::channel::<WatcherMsg>(32);
         let watcher = StatusNotifierWatcher::new(watcher_tx);
 
+        // Clone the Arc BEFORE moving watcher into serve_at.
+        let watcher_items = watcher.items.clone();
+
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
         let conn = zbus::connection::Builder::session()?
@@ -104,6 +111,7 @@ impl TrayHost {
             state: RwLock::new(HostState::new()),
             events_tx: events_tx.clone(),
             conn: conn.clone(),
+            watcher_items,
         });
 
         let host = TrayHost {
@@ -547,11 +555,21 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
         .map(|item| item.id.clone())
         .collect();
 
-    for id in ids_to_remove {
-        state.items.remove(&id);
-        state.invalidate_pixmap_cache(&id);
+    for id in &ids_to_remove {
+        state.items.remove(id);
+        state.invalidate_pixmap_cache(id);
         let _ = inner.events_tx.send(HostEvent::ItemRemoved(id.clone()));
         debug!(%id, %gone, "item removed from cache");
+    }
+
+    // Also clean the D-Bus-facing watcher item list so clients
+    // querying the `RegisteredStatusNotifierItems` property (e.g.
+    // tray-trigger) don't see stale entries.
+    if !ids_to_remove.is_empty() {
+        let mut watcher_items = inner.watcher_items.lock().await;
+        for id in &ids_to_remove {
+            watcher_items.retain(|s| s != &id.0);
+        }
     }
 }
 

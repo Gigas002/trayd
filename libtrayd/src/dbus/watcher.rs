@@ -5,7 +5,8 @@
 //! `RegisterStatusNotifierItem` on it; the watcher forwards registrations to
 //! [`TrayHost`](crate::host::TrayHost) via an internal mpsc channel.
 
-use tokio::sync::{Mutex, mpsc};
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::debug;
 use zbus::{interface, object_server::SignalEmitter};
 
@@ -29,24 +30,21 @@ pub enum WatcherMsg {
 
 // ─── Internal watcher state ──────────────────────────────────────────────────
 
-struct Inner {
-    items: Vec<String>,
-}
-
 // ─── StatusNotifierWatcher ───────────────────────────────────────────────────
 
 /// D-Bus implementation of `org.kde.StatusNotifierWatcher`.
 ///
 /// Registered at `/StatusNotifierWatcher` via [`zbus::ObjectServer`].
 pub struct StatusNotifierWatcher {
-    inner: Mutex<Inner>,
+    /// Shared item list also accessible from the host background loop.
+    pub(crate) items: Arc<tokio::sync::Mutex<Vec<String>>>,
     msg_tx: mpsc::Sender<WatcherMsg>,
 }
 
 impl StatusNotifierWatcher {
     pub fn new(msg_tx: mpsc::Sender<WatcherMsg>) -> Self {
         Self {
-            inner: Mutex::new(Inner { items: Vec::new() }),
+            items: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             msg_tx,
         }
     }
@@ -73,9 +71,9 @@ impl StatusNotifierWatcher {
         };
 
         let should_notify = {
-            let mut inner = self.inner.lock().await;
-            if !inner.items.contains(&service_id) {
-                inner.items.push(service_id.clone());
+            let mut items = self.items.lock().await;
+            if !items.contains(&service_id) {
+                items.push(service_id.clone());
                 true
             } else {
                 false
@@ -116,7 +114,7 @@ impl StatusNotifierWatcher {
     /// List of currently registered items.
     #[zbus(property)]
     async fn registered_status_notifier_items(&self) -> Vec<String> {
-        self.inner.lock().await.items.clone()
+        self.items.lock().await.clone()
     }
 
     /// Always `true` — we are the host.
