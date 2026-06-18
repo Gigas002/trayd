@@ -19,7 +19,10 @@ use tokio::sync::{RwLock, broadcast, mpsc, Mutex};
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
-use zbus::zvariant::OwnedValue;
+use zbus::{
+    object_server::SignalEmitter,
+    zvariant::{ObjectPath, OwnedValue},
+};
 
 use crate::{
     TraydError,
@@ -564,11 +567,32 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
 
     // Also clean the D-Bus-facing watcher item list so clients
     // querying the `RegisteredStatusNotifierItems` property (e.g.
-    // tray-trigger) don't see stale entries.
+    // tray-trigger) don't see stale entries, and emit
+    // StatusNotifierItemUnregistered signals.
     if !ids_to_remove.is_empty() {
         let mut watcher_items = inner.watcher_items.lock().await;
         for id in &ids_to_remove {
             watcher_items.retain(|s| s != &id.0);
+        }
+
+        let path = ObjectPath::from_static_str(SNI_WATCHER_PATH)
+            .expect("SNI_WATCHER_PATH is a valid object path");
+        let emitter = match SignalEmitter::new(&inner.conn, path) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(%e, "failed to create signal emitter, skipping StatusNotifierItemUnregistered");
+                return;
+            }
+        };
+        for id in &ids_to_remove {
+            if let Err(e) = StatusNotifierWatcher::status_notifier_item_unregistered(
+                &emitter,
+                &id.0,
+            )
+            .await
+            {
+                warn!(%e, %id, "failed to emit StatusNotifierItemUnregistered");
+            }
         }
     }
 }
