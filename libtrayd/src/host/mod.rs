@@ -736,8 +736,15 @@ async fn run_item_signal_watcher(
             return;
         }
     };
+    let new_tool_tip = match proxy.receive_new_tool_tip().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(%e, %id, "signal watcher: new_tool_tip subscribe failed");
+            return;
+        }
+    };
 
-    tokio::pin!(new_icon, new_title, new_status, new_attention, new_overlay, new_menu);
+    tokio::pin!(new_icon, new_title, new_status, new_attention, new_overlay, new_menu, new_tool_tip);
     debug!(%id, "item signal watcher started");
 
     loop {
@@ -761,6 +768,9 @@ async fn run_item_signal_watcher(
             }
             Some(_) = new_menu.next() => {
                 on_menu_path_changed(&inner, &id, &proxy).await;
+            }
+            Some(_) = new_tool_tip.next() => {
+                on_tool_tip_changed(&inner, &id, &proxy).await;
             }
             else => break,
         }
@@ -850,6 +860,49 @@ async fn on_title_changed(
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
         debug!(%id, "title updated");
+    }
+}
+
+/// Re-fetch the tooltip from D-Bus and update the item cache.
+async fn on_tool_tip_changed(
+    inner: &Arc<TrayHostInner>,
+    id: &ItemId,
+    proxy: &StatusNotifierItemProxy<'_>,
+) {
+    let raw = proxy.tool_tip().await.unwrap_or_else(|e| {
+        warn!(%e, %id, "failed to fetch tool_tip");
+        Default::default()
+    });
+    let new_tip = ToolTip {
+        icon_name: raw.0,
+        icon_pixmaps: raw
+            .1
+            .into_iter()
+            .map(|(w, h, data)| IconPixmap {
+                width: w,
+                height: h,
+                data,
+            })
+            .collect(),
+        title: raw.2,
+        description: raw.3,
+    };
+
+    let event = {
+        let mut state = inner.state.write().await;
+        let maybe_item = state.items.get_mut(id).map(|item| {
+            item.tool_tip = new_tip;
+            item.clone()
+        });
+        if let Some(item_clone) = maybe_item {
+            Some(HostEvent::ItemChanged(item_clone))
+        } else {
+            None
+        }
+    };
+    if let Some(e) = event {
+        let _ = inner.events_tx.send(e);
+        debug!(%id, "tooltip updated");
     }
 }
 
