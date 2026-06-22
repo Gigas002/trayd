@@ -23,7 +23,10 @@ use zbus::zvariant::OwnedValue;
 
 use crate::{
     TraydError,
-    dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
+    dbus::{
+        DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherCmd, WatcherMsg,
+        run_watcher_cmd_loop,
+    },
     model::{HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, TrayItem, TrayStatus},
 };
 
@@ -63,6 +66,10 @@ struct TrayHostInner {
     state: RwLock<HostState>,
     events_tx: broadcast::Sender<HostEvent>,
     conn: zbus::Connection,
+    /// Sender for unregistration commands to the watcher.  When a bus name
+    /// disappears the host sends a [`WatcherCmd`] instead of directly locking
+    /// the watcher's internal item list.
+    cmd_tx: mpsc::Sender<WatcherCmd>,
 }
 
 // ─── TrayHost ─────────────────────────────────────────────────────────────────
@@ -87,7 +94,13 @@ impl TrayHost {
     pub async fn start() -> Result<Self, TraydError> {
         // Internal channel: watcher D-Bus object → host background loop.
         let (watcher_tx, watcher_rx) = mpsc::channel::<WatcherMsg>(32);
+        // Channel: host → watcher for unregistration commands.
+        let (cmd_tx, cmd_rx) = mpsc::channel::<WatcherCmd>(32);
         let watcher = StatusNotifierWatcher::new(watcher_tx);
+
+        // Clone the items Arc for the command-processing task BEFORE moving
+        // watcher into serve_at.  The host never touches this Arc directly.
+        let watcher_items = watcher.items_cloned();
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
@@ -98,12 +111,17 @@ impl TrayHost {
             .await?;
         info!("claimed D-Bus name {SNI_WATCHER_NAME}; watcher at {SNI_WATCHER_PATH}");
 
+        // Spawn the watcher command-processing task.
+        let cmd_conn = conn.clone();
+        tokio::spawn(run_watcher_cmd_loop(cmd_conn, watcher_items, cmd_rx));
+
         let (events_tx, _) = broadcast::channel(EVENTS_CAPACITY);
 
         let inner = Arc::new(TrayHostInner {
             state: RwLock::new(HostState::new()),
             events_tx: events_tx.clone(),
             conn: conn.clone(),
+            cmd_tx,
         });
 
         let host = TrayHost {
@@ -547,11 +565,23 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
         .map(|item| item.id.clone())
         .collect();
 
-    for id in ids_to_remove {
-        state.items.remove(&id);
-        state.invalidate_pixmap_cache(&id);
+    for id in &ids_to_remove {
+        state.items.remove(id);
+        state.invalidate_pixmap_cache(id);
         let _ = inner.events_tx.send(HostEvent::ItemRemoved(id.clone()));
         debug!(%id, %gone, "item removed from cache");
+    }
+
+    // Tell the watcher to remove stale entries from its D-Bus-facing
+    // `RegisteredStatusNotifierItems` list and emit the
+    // `StatusNotifierItemUnregistered` signal.  We send a message instead
+    // of directly locking the watcher's list so the watcher stays the sole
+    // owner of its state (channel-based ownership).
+    for id in &ids_to_remove {
+        let _ = inner
+            .cmd_tx
+            .send(WatcherCmd::UnregisterItem(id.0.clone()))
+            .await;
     }
 }
 
