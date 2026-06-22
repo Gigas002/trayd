@@ -139,9 +139,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64-ng"
-version = "1.0.8"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e82a23a3dc4d31148b7f0ea64039a0e59bba046e2879fe763f512bc1f26597"
+checksum = "3e9a6fdffd0a02049343b2bde0b86b3f38a8617a316f01de56811bec1fb78659"
 
 [[package]]
 name = "bit-set"
