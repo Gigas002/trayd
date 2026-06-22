@@ -4,10 +4,19 @@
 //! `org.kde.StatusNotifierWatcher` well-known bus name.  Apps call
 //! `RegisterStatusNotifierItem` on it; the watcher forwards registrations to
 //! [`TrayHost`](crate::host::TrayHost) via an internal mpsc channel.
+//!
+//! # Ownership
+//!
+//! The registered-items list is **private** to the watcher — the host never
+//! holds a reference to it.  When a bus name disappears the host sends a
+//! [`WatcherCmd`] through a dedicated channel; the internal
+//! [`run_watcher_cmd_loop`] task removes the stale entry and emits the
+//! `StatusNotifierItemUnregistered` D-Bus signal.
 
+use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use tracing::debug;
-use zbus::{interface, object_server::SignalEmitter};
+use tracing::{debug, warn};
+use zbus::{interface, object_server::SignalEmitter, zvariant::ObjectPath};
 
 // ─── WatcherMsg ──────────────────────────────────────────────────────────────
 
@@ -27,10 +36,19 @@ pub enum WatcherMsg {
     },
 }
 
-// ─── Internal watcher state ──────────────────────────────────────────────────
+// ─── WatcherCmd ──────────────────────────────────────────────────────────────
 
-struct Inner {
-    items: Vec<String>,
+/// Command sent from the host background loop **to** the watcher when a D-Bus
+/// bus name disappears.
+///
+/// The corresponding [`run_watcher_cmd_loop`] task processes these commands:
+/// it removes the stale entry from the private items list and emits the
+/// appropriate D-Bus signal.
+#[derive(Debug)]
+pub enum WatcherCmd {
+    /// A bus name disappeared; remove this service from `RegisteredStatusNotifierItems`
+    /// and emit `StatusNotifierItemUnregistered`.
+    UnregisterItem(String),
 }
 
 // ─── StatusNotifierWatcher ───────────────────────────────────────────────────
@@ -38,17 +56,29 @@ struct Inner {
 /// D-Bus implementation of `org.kde.StatusNotifierWatcher`.
 ///
 /// Registered at `/StatusNotifierWatcher` via [`zbus::ObjectServer`].
+///
+/// The registered-items list is **not** shared with the host — the host
+/// communicates item removal through [`WatcherCmd`] messages instead.
 pub struct StatusNotifierWatcher {
-    inner: Mutex<Inner>,
+    /// Private item list; never shared with `TrayHostInner`.
+    items: Arc<Mutex<Vec<String>>>,
     msg_tx: mpsc::Sender<WatcherMsg>,
 }
 
 impl StatusNotifierWatcher {
     pub fn new(msg_tx: mpsc::Sender<WatcherMsg>) -> Self {
         Self {
-            inner: Mutex::new(Inner { items: Vec::new() }),
+            items: Arc::new(Mutex::new(Vec::new())),
             msg_tx,
         }
+    }
+
+    /// Clone the items `Arc` for the internal command-processing task.
+    ///
+    /// This is the **only** way the items list escapes the watcher, and it
+    /// stays within this module (never reaches `TrayHostInner`).
+    pub(crate) fn items_cloned(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.items)
     }
 }
 
@@ -73,9 +103,9 @@ impl StatusNotifierWatcher {
         };
 
         let should_notify = {
-            let mut inner = self.inner.lock().await;
-            if !inner.items.contains(&service_id) {
-                inner.items.push(service_id.clone());
+            let mut items = self.items.lock().await;
+            if !items.contains(&service_id) {
+                items.push(service_id.clone());
                 true
             } else {
                 false
@@ -116,7 +146,7 @@ impl StatusNotifierWatcher {
     /// List of currently registered items.
     #[zbus(property)]
     async fn registered_status_notifier_items(&self) -> Vec<String> {
-        self.inner.lock().await.items.clone()
+        self.items.lock().await.clone()
     }
 
     /// Always `true` — we are the host.
@@ -140,13 +170,63 @@ impl StatusNotifierWatcher {
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn status_notifier_item_unregistered(
+    pub async fn status_notifier_item_unregistered(
         emitter: &SignalEmitter<'_>,
         service: &str,
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn status_notifier_host_registered(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+// ─── Watcher command loop ────────────────────────────────────────────────────
+
+const SNI_WATCHER_PATH: &str = "/StatusNotifierWatcher";
+
+/// Background task that processes [`WatcherCmd`] messages from the host.
+///
+/// Owns a clone of the private items list so the host never needs direct
+/// access to it.
+pub(crate) async fn run_watcher_cmd_loop(
+    conn: zbus::Connection,
+    items: Arc<Mutex<Vec<String>>>,
+    mut cmd_rx: mpsc::Receiver<WatcherCmd>,
+) {
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            WatcherCmd::UnregisterItem(service_id) => {
+                // Remove from the registered list so clients querying the
+                // `RegisteredStatusNotifierItems` property don't see stale entries.
+                items.lock().await.retain(|s| s != &service_id);
+
+                // Emit the D-Bus signal so watcher clients (e.g. tray-trigger)
+                // receive timely removal notifications.
+                let path = match ObjectPath::from_static_str(SNI_WATCHER_PATH) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!(%e, "invalid watcher object path");
+                        continue;
+                    }
+                };
+                let emitter = match SignalEmitter::new(&conn, path) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(
+                            %e,
+                            "failed to create signal emitter, skipping StatusNotifierItemUnregistered"
+                        );
+                        continue;
+                    }
+                };
+                if let Err(e) =
+                    StatusNotifierWatcher::status_notifier_item_unregistered(&emitter, &service_id)
+                        .await
+                {
+                    warn!(%e, %service_id, "failed to emit StatusNotifierItemUnregistered");
+                }
+            }
+        }
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
