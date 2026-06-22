@@ -24,7 +24,10 @@ use zbus::zvariant::OwnedValue;
 use crate::{
     TraydError,
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
-    model::{HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem, TrayStatus},
+    model::{
+        HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
+        TrayStatus,
+    },
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
