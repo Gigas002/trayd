@@ -905,11 +905,7 @@ async fn on_tool_tip_changed(
             item.tool_tip = new_tip;
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
@@ -965,11 +961,7 @@ async fn on_overlay_icon_changed(
             item.overlay_icon = new_overlay;
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
@@ -995,11 +987,7 @@ async fn on_menu_path_changed(
             item.menu_path = menu_path;
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
