@@ -7,11 +7,12 @@
 //!
 //! # Ownership
 //!
-//! The registered-items list is **private** to the watcher — the host never
-//! holds a reference to it.  When a bus name disappears the host sends a
+//! The registered-items and registered-hosts lists are **private** to the
+//! watcher — the host never holds a reference to them.  When a bus name
+//! disappears the host sends a
 //! [`WatcherCmd`] through a dedicated channel; the internal
 //! [`run_watcher_cmd_loop`] task removes the stale entry and emits the
-//! `StatusNotifierItemUnregistered` D-Bus signal.
+//! appropriate D-Bus signal.
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -49,6 +50,9 @@ pub enum WatcherCmd {
     /// A bus name disappeared; remove this service from `RegisteredStatusNotifierItems`
     /// and emit `StatusNotifierItemUnregistered`.
     UnregisterItem(String),
+    /// A bus name disappeared; remove it from `RegisteredStatusNotifierHosts`
+    /// and emit `StatusNotifierHostUnregistered`.
+    UnregisterHost(String),
 }
 
 // ─── StatusNotifierWatcher ───────────────────────────────────────────────────
@@ -62,6 +66,8 @@ pub enum WatcherCmd {
 pub struct StatusNotifierWatcher {
     /// Private item list; never shared with `TrayHostInner`.
     items: Arc<Mutex<Vec<String>>>,
+    /// Private host list; never shared with `TrayHostInner`.
+    hosts: Arc<Mutex<Vec<String>>>,
     msg_tx: mpsc::Sender<WatcherMsg>,
 }
 
@@ -69,6 +75,7 @@ impl StatusNotifierWatcher {
     pub fn new(msg_tx: mpsc::Sender<WatcherMsg>) -> Self {
         Self {
             items: Arc::new(Mutex::new(Vec::new())),
+            hosts: Arc::new(Mutex::new(Vec::new())),
             msg_tx,
         }
     }
@@ -79,6 +86,11 @@ impl StatusNotifierWatcher {
     /// stays within this module (never reaches `TrayHostInner`).
     pub(crate) fn items_cloned(&self) -> Arc<Mutex<Vec<String>>> {
         Arc::clone(&self.items)
+    }
+
+    /// Clone the hosts `Arc` for the internal command-processing task.
+    pub(crate) fn hosts_cloned(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.hosts)
     }
 }
 
@@ -130,13 +142,27 @@ impl StatusNotifierWatcher {
         Ok(())
     }
 
-    /// Called by SNI hosts to announce themselves.  We are always the host, so
-    /// this is a no-op other than emitting the confirmation signal.
+    /// Called by SNI hosts to announce themselves.
     async fn register_status_notifier_host(
         &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-        _service: &str,
+        service: &str,
     ) -> zbus::fdo::Result<()> {
+        let host_id = if service.is_empty() {
+            hdr.sender().map(|s| s.to_string()).unwrap_or_default()
+        } else {
+            service.to_owned()
+        };
+
+        if !host_id.is_empty() {
+            let mut hosts = self.hosts.lock().await;
+            if !hosts.contains(&host_id) {
+                hosts.push(host_id.clone());
+            }
+        }
+
+        debug!(%host_id, "SNI host registered");
         Self::status_notifier_host_registered(&emitter)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
@@ -147,6 +173,12 @@ impl StatusNotifierWatcher {
     #[zbus(property)]
     async fn registered_status_notifier_items(&self) -> Vec<String> {
         self.items.lock().await.clone()
+    }
+
+    /// List of currently registered host service names.
+    #[zbus(property)]
+    async fn registered_status_notifier_hosts(&self) -> Vec<String> {
+        self.hosts.lock().await.clone()
     }
 
     /// Always `true` — we are the host.
@@ -177,6 +209,12 @@ impl StatusNotifierWatcher {
 
     #[zbus(signal)]
     async fn status_notifier_host_registered(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn status_notifier_host_unregistered(
+        emitter: &SignalEmitter<'_>,
+        service: &str,
+    ) -> zbus::Result<()>;
 }
 
 // ─── Watcher command loop ────────────────────────────────────────────────────
@@ -185,11 +223,12 @@ const SNI_WATCHER_PATH: &str = "/StatusNotifierWatcher";
 
 /// Background task that processes [`WatcherCmd`] messages from the host.
 ///
-/// Owns a clone of the private items list so the host never needs direct
-/// access to it.
+/// Owns clones of the private items and hosts lists so the host never needs
+/// direct access to them.
 pub(crate) async fn run_watcher_cmd_loop(
     conn: zbus::Connection,
     items: Arc<Mutex<Vec<String>>>,
+    hosts: Arc<Mutex<Vec<String>>>,
     mut cmd_rx: mpsc::Receiver<WatcherCmd>,
 ) {
     while let Some(cmd) = cmd_rx.recv().await {
@@ -223,6 +262,46 @@ pub(crate) async fn run_watcher_cmd_loop(
                         .await
                 {
                     warn!(%e, %service_id, "failed to emit StatusNotifierItemUnregistered");
+                }
+            }
+            WatcherCmd::UnregisterHost(bus_name) => {
+                // Check whether the gone bus name is a registered host; if so,
+                // remove it and emit the signal.
+                let was_host = {
+                    let mut hosts = hosts.lock().await;
+                    if hosts.contains(&bus_name) {
+                        hosts.retain(|s| s != &bus_name);
+                        true
+                    } else {
+                        false
+                    }
+                };
+
+                if was_host {
+                    let path = match ObjectPath::from_static_str(SNI_WATCHER_PATH) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(%e, "invalid watcher object path");
+                            continue;
+                        }
+                    };
+                    let emitter = match SignalEmitter::new(&conn, path) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!(
+                                %e,
+                                "failed to create signal emitter, skipping StatusNotifierHostUnregistered"
+                            );
+                            continue;
+                        }
+                    };
+                    if let Err(e) = StatusNotifierWatcher::status_notifier_host_unregistered(
+                        &emitter, &bus_name,
+                    )
+                    .await
+                    {
+                        warn!(%e, %bus_name, "failed to emit StatusNotifierHostUnregistered");
+                    }
                 }
             }
         }

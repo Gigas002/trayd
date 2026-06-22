@@ -101,6 +101,7 @@ impl TrayHost {
         // Clone the items Arc for the command-processing task BEFORE moving
         // watcher into serve_at.  The host never touches this Arc directly.
         let watcher_items = watcher.items_cloned();
+        let watcher_hosts = watcher.hosts_cloned();
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
@@ -113,7 +114,12 @@ impl TrayHost {
 
         // Spawn the watcher command-processing task.
         let cmd_conn = conn.clone();
-        tokio::spawn(run_watcher_cmd_loop(cmd_conn, watcher_items, cmd_rx));
+        tokio::spawn(run_watcher_cmd_loop(
+            cmd_conn,
+            watcher_items,
+            watcher_hosts,
+            cmd_rx,
+        ));
 
         let (events_tx, _) = broadcast::channel(EVENTS_CAPACITY);
 
@@ -583,6 +589,13 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
             .send(WatcherCmd::UnregisterItem(id.0.clone()))
             .await;
     }
+
+    // Also check whether the gone bus name belongs to a registered host.
+    // The command task will verify and clean up if so.
+    let _ = inner
+        .cmd_tx
+        .send(WatcherCmd::UnregisterHost(gone.clone()))
+        .await;
 }
 
 // ─── Property fetch helper ────────────────────────────────────────────────────
