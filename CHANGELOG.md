@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`libtrayd` / `trayd` / `trayctl`**: `TrayItem` now carries three new SNI fields read
+  during item registration:
+  - `category` — item category string per the SNI spec (`"ApplicationStatus"`,
+    `"Communications"`, `"SystemServices"`, `"Hardware"`).
+  - `item_is_menu` — `true` when the item is a pure menu with no application window.
+    `TrayHost::activate` now returns `ActivationFailed` when called with `item_id = 0`
+    on a menu-only item; use `get_menu` / `activate` with a non-zero `item_id` instead.
+  - `tool_tip` — tooltip title, description, and icon data.
+- **IPC `MinimalTrayItem`**: the wire type exposed by `get_items` / `subscribe` now
+  includes `category` (string | absent), `item_is_menu` (bool, omitted when `false`),
+  `tooltip_title` (string | absent), and `tooltip_description` (string | absent).
+  Existing clients are unaffected — the new fields default gracefully when absent.
+
 - **`trayctl subscribe`**: built-in CLI alternative to subscribing via the socket directly. Sends
   a `subscribe` request and streams tray-state updates as NDJSON to stdout — one line per event,
   each line a JSON array of `MinimalTrayItem` objects. Exits cleanly when the daemon closes the
