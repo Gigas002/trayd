@@ -7,6 +7,10 @@ fn make_tray_item(app_id: &str) -> MinimalTrayItem {
         title: None,
         status: "Active".to_owned(),
         icon_handle: None,
+        category: None,
+        item_is_menu: false,
+        tooltip_title: None,
+        tooltip_description: None,
     }
 }
 
@@ -183,10 +187,23 @@ fn compute_action_nothing_on_empty_items() {
 }
 
 #[test]
-fn compute_action_open_menu_for_item() {
+fn compute_action_primary_activate_for_item() {
+    // A regular (non-menu-only) item should fire PrimaryActivate on Enter.
     let app = items_app(vec![make_tray_item("org.nm")]);
     match app.compute_action() {
-        super::Action::OpenMenu(id) => assert_eq!(id, "org.nm"),
+        super::Action::PrimaryActivate(id) => assert_eq!(id, "org.nm"),
+        other => panic!("expected PrimaryActivate, got {other:?}"),
+    }
+}
+
+#[test]
+fn compute_action_open_menu_for_menu_only_item() {
+    // A menu-only item should open the menu on Enter.
+    let mut item = make_tray_item("org.menuapp");
+    item.item_is_menu = true;
+    let app = items_app(vec![item]);
+    match app.compute_action() {
+        super::Action::OpenMenu(id) => assert_eq!(id, "org.menuapp"),
         other => panic!("expected OpenMenu, got {other:?}"),
     }
 }

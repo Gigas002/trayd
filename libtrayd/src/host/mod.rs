@@ -24,7 +24,10 @@ use zbus::zvariant::OwnedValue;
 use crate::{
     TraydError,
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
-    model::{HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, TrayItem, TrayStatus},
+    model::{
+        HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
+        TrayStatus,
+    },
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -221,17 +224,31 @@ impl TrayHost {
     /// # Errors
     ///
     /// - [`TraydError::NotFound`] if the item is not in the cache or has no menu.
-    /// - [`TraydError::ActivationFailed`] / [`TraydError::DBus`] on D-Bus error.
+    /// - [`TraydError::ActivationFailed`] if `item_id == 0` and the item is menu-only
+    ///   ([`TrayItem::item_is_menu`] is `true`), or on D-Bus activation error.
+    /// - [`TraydError::DBus`] on D-Bus transport error.
     pub async fn activate(&self, id: &ItemId, item_id: u32) -> Result<(), TraydError> {
         if item_id == 0 {
-            let (bus_name, object_path) = {
+            let (bus_name, object_path, item_is_menu) = {
                 let state = self.inner.state.read().await;
                 let item = state
                     .items
                     .get(id)
                     .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
-                (item.bus_name.clone(), item.object_path.clone())
+                (
+                    item.bus_name.clone(),
+                    item.object_path.clone(),
+                    item.item_is_menu,
+                )
             };
+
+            if item_is_menu {
+                return Err(TraydError::ActivationFailed {
+                    app_id: id.to_string(),
+                    reason: "item is menu-only; use get_menu / activate with item_id > 0"
+                        .to_owned(),
+                });
+            }
 
             let proxy = build_proxy(&self.inner.conn, &bus_name, &object_path).await?;
             proxy
@@ -594,6 +611,9 @@ async fn fetch_item_properties(
         proxy.id().await.unwrap_or_default(),
     );
     let raw_pixmaps = proxy.icon_pixmap().await.unwrap_or_default();
+    let category = proxy.category().await.unwrap_or_default();
+    let item_is_menu = proxy.item_is_menu().await.unwrap_or(false);
+    let raw_tool_tip = proxy.tool_tip().await.unwrap_or_default();
     let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_default();
     let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_default();
     let menu_path = proxy
@@ -601,6 +621,21 @@ async fn fetch_item_properties(
         .await
         .map(|p| p.to_string())
         .unwrap_or_default();
+
+    let tool_tip = ToolTip {
+        icon_name: raw_tool_tip.0,
+        icon_pixmaps: raw_tool_tip
+            .1
+            .into_iter()
+            .map(|(w, h, data)| IconPixmap {
+                width: w,
+                height: h,
+                data,
+            })
+            .collect(),
+        title: raw_tool_tip.2,
+        description: raw_tool_tip.3,
+    };
 
     let pixmaps = raw_pixmaps
         .into_iter()
@@ -617,6 +652,9 @@ async fn fetch_item_properties(
         object_path: object_path.to_owned(),
         title,
         status,
+        category,
+        item_is_menu,
+        tool_tip,
         icon: IconData {
             name: icon_name,
             pixmaps,

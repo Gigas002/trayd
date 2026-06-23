@@ -72,18 +72,25 @@ Every request is a JSON object on one line:
   "app_id": "org.example.App",
   "title": "Example App",
   "status": "Active",
-  "icon_handle": "example-app"
+  "icon_handle": "example-app",
+  "category": "ApplicationStatus",
+  "tooltip_title": "Example App"
 }
 ```
 
-`title` and `icon_handle` are omitted when `null`.
+`title`, `icon_handle`, `category`, `tooltip_title`, and `tooltip_description` are omitted when absent.
+`item_is_menu` is omitted when `false`.
 
-| Field         | Type             | Notes                                       |
-| ------------- | ---------------- | ------------------------------------------- |
-| `app_id`      | string           | stable SNI registration id                  |
-| `title`       | string \| absent | display name                                |
-| `status`      | string           | `"Active"`, `"Passive"`, `"NeedsAttention"` |
-| `icon_handle` | string \| absent | theme icon name or handle                   |
+| Field                 | Type             | Notes                                                                                     |
+| --------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
+| `app_id`              | string           | stable SNI registration id                                                                |
+| `title`               | string \| absent | display name                                                                              |
+| `status`              | string           | `"Active"`, `"Passive"`, `"NeedsAttention"`                                               |
+| `icon_handle`         | string \| absent | theme icon name or handle                                                                 |
+| `category`            | string \| absent | SNI category: `"ApplicationStatus"`, `"Communications"`, `"SystemServices"`, `"Hardware"` |
+| `item_is_menu`        | bool \| absent   | `true` when the item is a pure menu — **do not call `activate` with `item_id=0`**         |
+| `tooltip_title`       | string \| absent | tooltip title text                                                                        |
+| `tooltip_description` | string \| absent | tooltip description text                                                                  |
 
 ### `MenuItem`
 
@@ -157,7 +164,7 @@ Golden request/response pairs live under `examples/ipc-examples/*.jsonl` — fir
 
 ```
 {"v":1,"cmd":"get_items"}
-{"v":1,"type":"items","items":[{"app_id":"org.example.App","title":"Example App","status":"Active","icon_handle":"example-app"}]}
+{"v":1,"type":"items","items":[{"app_id":"org.example.App","title":"Example App","status":"Active","icon_handle":"example-app","category":"ApplicationStatus","tooltip_title":"Example App"}]}
 ```
 
 ### `get_menu` (top-level)

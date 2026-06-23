@@ -44,6 +44,14 @@ pub trait StatusNotifierItem {
     #[zbus(property)]
     fn category(&self) -> zbus::Result<String>;
 
+    /// Whether the item is a pure menu (no application window — should not activate).
+    #[zbus(property)]
+    fn item_is_menu(&self) -> zbus::Result<bool>;
+
+    /// Tooltip data: `(icon_name, icon_pixmaps, title, description)`.
+    #[zbus(property)]
+    fn tool_tip(&self) -> zbus::Result<(String, Vec<(i32, i32, Vec<u8>)>, String, String)>;
+
     /// Human-readable title.
     #[zbus(property)]
     fn title(&self) -> zbus::Result<String>;

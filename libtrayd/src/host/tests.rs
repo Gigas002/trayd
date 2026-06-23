@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{IconData, ItemId, PixmapData, TrayItem, TrayStatus};
+use crate::model::{IconData, ItemId, PixmapData, ToolTip, TrayItem, TrayStatus};
 
 // ─── resolve_icon_name ────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,9 @@ fn dummy_item(id: &str) -> TrayItem {
         object_path: "/StatusNotifierItem".to_owned(),
         title: id.to_owned(),
         status: TrayStatus::Active,
+        category: String::new(),
+        item_is_menu: false,
+        tool_tip: ToolTip::default(),
         icon: IconData::default(),
         attention_icon: IconData::default(),
         menu_path: String::new(),
@@ -247,5 +250,28 @@ fn tray_item_attention_icon_defaults_empty() {
     assert!(
         item.attention_icon.is_empty(),
         "attention_icon defaults to empty IconData"
+    );
+}
+
+#[test]
+fn tray_item_item_is_menu_defaults_false() {
+    let item = dummy_item("App");
+    assert!(!item.item_is_menu, "item_is_menu defaults to false");
+}
+
+#[test]
+fn tray_item_tool_tip_defaults_empty() {
+    let item = dummy_item("App");
+    assert!(
+        item.tool_tip.title.is_empty(),
+        "tool_tip.title defaults to empty"
+    );
+    assert!(
+        item.tool_tip.description.is_empty(),
+        "tool_tip.description defaults to empty"
+    );
+    assert!(
+        item.tool_tip.icon_name.is_empty(),
+        "tool_tip.icon_name defaults to empty"
     );
 }

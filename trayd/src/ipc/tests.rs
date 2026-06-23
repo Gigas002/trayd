@@ -250,3 +250,55 @@ async fn golden_ping_fixture() {
     let resp: IpcResponse = serde_json::from_str(resp_line).unwrap();
     assert!(matches!(resp, IpcResponse::Ok(ref ok) if ok.payload == OkPayload::Pong));
 }
+
+#[tokio::test]
+async fn minimal_tray_item_item_is_menu_omitted_when_false() {
+    use super::protocol::MinimalTrayItem;
+    let item = MinimalTrayItem {
+        app_id: "org.example.App".into(),
+        title: Some("Example App".into()),
+        status: "Active".into(),
+        icon_handle: Some("example-app".into()),
+        category: Some("ApplicationStatus".into()),
+        item_is_menu: false,
+        tooltip_title: None,
+        tooltip_description: None,
+    };
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(
+        !json.contains("item_is_menu"),
+        "item_is_menu must be omitted when false; got: {json}"
+    );
+    assert!(
+        json.contains("ApplicationStatus"),
+        "category must be present; got: {json}"
+    );
+}
+
+#[tokio::test]
+async fn minimal_tray_item_item_is_menu_present_when_true() {
+    use super::protocol::MinimalTrayItem;
+    let item = MinimalTrayItem {
+        app_id: "org.example.MenuApp".into(),
+        title: Some("Menu App".into()),
+        status: "Active".into(),
+        icon_handle: None,
+        category: None,
+        item_is_menu: true,
+        tooltip_title: Some("Menu App Tooltip".into()),
+        tooltip_description: Some("A tooltip description".into()),
+    };
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(
+        json.contains(r#""item_is_menu":true"#),
+        "item_is_menu must be present when true; got: {json}"
+    );
+    assert!(
+        json.contains(r#""tooltip_title":"Menu App Tooltip""#),
+        "tooltip_title must be present; got: {json}"
+    );
+    assert!(
+        json.contains(r#""tooltip_description":"A tooltip description""#),
+        "tooltip_description must be present; got: {json}"
+    );
+}

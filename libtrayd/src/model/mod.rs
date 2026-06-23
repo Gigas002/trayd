@@ -142,6 +142,21 @@ pub struct MenuNode {
     pub children: Vec<MenuNode>,
 }
 
+// ─── ToolTip ─────────────────────────────────────────────────────────────────
+
+/// Tooltip data from the SNI `StatusNotifierItem.ToolTip` property.
+#[derive(Debug, Clone, Default)]
+pub struct ToolTip {
+    /// XDG icon-theme icon name.
+    pub icon_name: String,
+    /// Raw pixmap surfaces for the tooltip icon.
+    pub icon_pixmaps: Vec<IconPixmap>,
+    /// Tooltip title text.
+    pub title: String,
+    /// Tooltip description text.
+    pub description: String,
+}
+
 // ─── TrayItem ────────────────────────────────────────────────────────────────
 
 /// In-process snapshot of one registered SNI item.
@@ -157,6 +172,12 @@ pub struct TrayItem {
     pub title: String,
     /// Current visibility / urgency status.
     pub status: TrayStatus,
+    /// Item category per SNI spec (Application, Communications, SystemServices, Hardware).
+    pub category: String,
+    /// `true` when this item is a pure menu (no application window — should not activate).
+    pub item_is_menu: bool,
+    /// Tooltip data (icon name, pixmaps, title, description).
+    pub tool_tip: ToolTip,
     /// Normal icon data.
     pub icon: IconData,
     /// Attention icon data — shown when `status == NeedsAttention`.

@@ -12,6 +12,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use tokio::sync::mpsc;
 
@@ -41,6 +42,7 @@ pub enum View {
 enum Action {
     OpenMenu(String),
     OpenSubmenu { app_id: String, item_id: u32 },
+    PrimaryActivate(String),
     Activate { app_id: String, item_id: u32 },
     Nothing,
 }
@@ -149,6 +151,19 @@ impl App {
                     self.status_msg = Some(format!("Error: {e}"));
                 }
             }
+            // `m` always opens the menu for the selected tray item, regardless of
+            // whether `item_is_menu` is set.  Useful for items whose primary action
+            // is activation but that also expose a context menu.
+            KeyCode::Char('m') => {
+                if matches!(self.view, View::Items)
+                    && let Some(item) = self.tray_items.get(self.items_cursor)
+                {
+                    let action = Action::OpenMenu(item.app_id.clone());
+                    if let Err(e) = self.execute_action(action).await {
+                        self.status_msg = Some(format!("Error: {e}"));
+                    }
+                }
+            }
             _ => {}
         }
         Ok(true)
@@ -157,7 +172,9 @@ impl App {
     fn compute_action(&self) -> Action {
         match &self.view {
             View::Items => match self.tray_items.get(self.items_cursor) {
-                Some(item) => Action::OpenMenu(item.app_id.clone()),
+                // Menu-only items go straight to the menu; regular items activate.
+                Some(item) if item.item_is_menu => Action::OpenMenu(item.app_id.clone()),
+                Some(item) => Action::PrimaryActivate(item.app_id.clone()),
                 None => Action::Nothing,
             },
             View::Menu { app_id, stack } => {
@@ -185,8 +202,17 @@ impl App {
     }
 
     async fn select(&mut self) -> Result<(), TuiError> {
-        match self.compute_action() {
+        let action = self.compute_action();
+        self.execute_action(action).await
+    }
+
+    async fn execute_action(&mut self, action: Action) -> Result<(), TuiError> {
+        match action {
             Action::Nothing => {}
+            Action::PrimaryActivate(app_id) => {
+                let mut client = IpcClient::connect(&self.socket_path).await?;
+                client.activate(&app_id, 0).await?;
+            }
             Action::OpenMenu(app_id) => {
                 let mut client = IpcClient::connect(&self.socket_path).await?;
                 let items = client.get_menu(&app_id, None).await?;
@@ -281,7 +307,21 @@ impl App {
             .iter()
             .map(|item| {
                 let name = item.title.as_deref().unwrap_or(item.app_id.as_str());
-                ListItem::new(format!("{name}  [{}]", item.status))
+                // [⊞] badge signals that Enter opens the menu rather than activating.
+                let menu_tag = if item.item_is_menu { "  [⊞]" } else { "" };
+                let mut lines = vec![Line::from(format!("{name}{menu_tag}  [{}]", item.status))];
+                // Show tooltip as a dim second line when available.
+                let tip = item
+                    .tooltip_title
+                    .as_deref()
+                    .or(item.tooltip_description.as_deref());
+                if let Some(tip) = tip {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {tip}"),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                ListItem::new(Text::from(lines))
             })
             .collect();
 
@@ -356,7 +396,7 @@ impl App {
             (format!(" {msg}"), Style::default().fg(Color::Red))
         } else {
             let hint = match &self.view {
-                View::Items => " j/k: navigate  Enter: open menu  q: quit",
+                View::Items => " j/k: navigate  Enter: activate/menu  m: open menu  q: quit",
                 View::Menu { .. } => " j/k: navigate  Enter: select  Esc: back  q: quit",
             };
             (hint.to_owned(), Style::default().fg(Color::DarkGray))
