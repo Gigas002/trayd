@@ -614,6 +614,8 @@ async fn fetch_item_properties(
     let category = proxy.category().await.unwrap_or_default();
     let item_is_menu = proxy.item_is_menu().await.unwrap_or(false);
     let raw_tool_tip = proxy.tool_tip().await.unwrap_or_default();
+    let overlay_icon_name = proxy.overlay_icon_name().await.unwrap_or_default();
+    let raw_overlay_pixmaps = proxy.overlay_icon_pixmap().await.unwrap_or_default();
     let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_default();
     let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_default();
     let menu_path = proxy
@@ -637,6 +639,18 @@ async fn fetch_item_properties(
         description: raw_tool_tip.3,
     };
 
+    let overlay_icon = IconData {
+        name: overlay_icon_name,
+        pixmaps: raw_overlay_pixmaps
+            .into_iter()
+            .map(|(w, h, data)| IconPixmap {
+                width: w,
+                height: h,
+                data,
+            })
+            .collect(),
+    };
+
     let pixmaps = raw_pixmaps
         .into_iter()
         .map(|(w, h, data)| IconPixmap {
@@ -655,6 +669,7 @@ async fn fetch_item_properties(
         category,
         item_is_menu,
         tool_tip,
+        overlay_icon,
         icon: IconData {
             name: icon_name,
             pixmaps,
@@ -724,8 +739,37 @@ async fn run_item_signal_watcher(
             return;
         }
     };
+    let new_overlay = match proxy.receive_new_overlay_icon().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(%e, %id, "signal watcher: new_overlay_icon subscribe failed");
+            return;
+        }
+    };
+    let new_menu = match proxy.receive_new_menu().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(%e, %id, "signal watcher: new_menu subscribe failed");
+            return;
+        }
+    };
+    let new_tool_tip = match proxy.receive_new_tool_tip().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(%e, %id, "signal watcher: new_tool_tip subscribe failed");
+            return;
+        }
+    };
 
-    tokio::pin!(new_icon, new_title, new_status, new_attention);
+    tokio::pin!(
+        new_icon,
+        new_title,
+        new_status,
+        new_attention,
+        new_overlay,
+        new_menu,
+        new_tool_tip
+    );
     debug!(%id, "item signal watcher started");
 
     loop {
@@ -743,6 +787,15 @@ async fn run_item_signal_watcher(
             }
             Some(_) = new_attention.next() => {
                 on_icon_changed(&inner, &id, &proxy, true, &bus_name).await;
+            }
+            Some(_) = new_overlay.next() => {
+                on_overlay_icon_changed(&inner, &id, &proxy).await;
+            }
+            Some(_) = new_menu.next() => {
+                on_menu_path_changed(&inner, &id, &proxy).await;
+            }
+            Some(_) = new_tool_tip.next() => {
+                on_tool_tip_changed(&inner, &id, &proxy).await;
             }
             else => break,
         }
@@ -854,6 +907,102 @@ async fn on_status_changed(inner: &Arc<TrayHostInner>, id: &ItemId, new_status: 
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
         debug!(%id, "status updated and pixmap cache cleared");
+    }
+}
+
+/// Re-fetch the tooltip from D-Bus and update the item cache.
+async fn on_tool_tip_changed(
+    inner: &Arc<TrayHostInner>,
+    id: &ItemId,
+    proxy: &StatusNotifierItemProxy<'_>,
+) {
+    let raw = proxy.tool_tip().await.unwrap_or_else(|e| {
+        warn!(%e, %id, "failed to fetch tool_tip");
+        Default::default()
+    });
+    let new_tip = ToolTip {
+        icon_name: raw.0,
+        icon_pixmaps: raw
+            .1
+            .into_iter()
+            .map(|(w, h, data)| IconPixmap {
+                width: w,
+                height: h,
+                data,
+            })
+            .collect(),
+        title: raw.2,
+        description: raw.3,
+    };
+
+    let event = {
+        let mut state = inner.state.write().await;
+        state.items.get_mut(id).map(|item| {
+            item.tool_tip = new_tip;
+            HostEvent::ItemChanged(item.clone())
+        })
+    };
+    if let Some(e) = event {
+        let _ = inner.events_tx.send(e);
+        debug!(%id, "tooltip updated");
+    }
+}
+
+/// Re-fetch the overlay icon from D-Bus and update the item cache.
+async fn on_overlay_icon_changed(
+    inner: &Arc<TrayHostInner>,
+    id: &ItemId,
+    proxy: &StatusNotifierItemProxy<'_>,
+) {
+    let icon_name = proxy.overlay_icon_name().await.unwrap_or_default();
+    let raw = proxy.overlay_icon_pixmap().await.unwrap_or_default();
+    let new_overlay = IconData {
+        name: icon_name,
+        pixmaps: raw
+            .into_iter()
+            .map(|(w, h, d)| IconPixmap {
+                width: w,
+                height: h,
+                data: d,
+            })
+            .collect(),
+    };
+
+    let event = {
+        let mut state = inner.state.write().await;
+        state.items.get_mut(id).map(|item| {
+            item.overlay_icon = new_overlay;
+            HostEvent::ItemChanged(item.clone())
+        })
+    };
+    if let Some(e) = event {
+        let _ = inner.events_tx.send(e);
+        debug!(%id, "overlay icon updated");
+    }
+}
+
+/// Re-fetch the menu path from D-Bus and update the item cache.
+async fn on_menu_path_changed(
+    inner: &Arc<TrayHostInner>,
+    id: &ItemId,
+    proxy: &StatusNotifierItemProxy<'_>,
+) {
+    let menu_path = proxy
+        .menu_path()
+        .await
+        .map(|p| p.to_string())
+        .unwrap_or_default();
+
+    let event = {
+        let mut state = inner.state.write().await;
+        state.items.get_mut(id).map(|item| {
+            item.menu_path = menu_path;
+            HostEvent::ItemChanged(item.clone())
+        })
+    };
+    if let Some(e) = event {
+        let _ = inner.events_tx.send(e);
+        debug!(%id, "menu path updated");
     }
 }
 

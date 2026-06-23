@@ -115,4 +115,8 @@ pub trait StatusNotifierItem {
     /// Emitted when the associated `Menu` object path changes.
     #[zbus(signal)]
     async fn new_menu(&self) -> zbus::Result<()>;
+
+    /// Emitted when the tooltip changes.
+    #[zbus(signal)]
+    async fn new_tool_tip(&self) -> zbus::Result<()>;
 }

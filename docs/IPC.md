@@ -78,7 +78,7 @@ Every request is a JSON object on one line:
 }
 ```
 
-`title`, `icon_handle`, `category`, `tooltip_title`, and `tooltip_description` are omitted when absent.
+`title`, `icon_handle`, `category`, `tooltip_title`, `tooltip_description`, and `overlay_icon_handle` are omitted when absent.
 `item_is_menu` is omitted when `false`.
 
 | Field                 | Type             | Notes                                                                                     |
@@ -91,6 +91,7 @@ Every request is a JSON object on one line:
 | `item_is_menu`        | bool \| absent   | `true` when the item is a pure menu — **do not call `activate` with `item_id=0`**         |
 | `tooltip_title`       | string \| absent | tooltip title text                                                                        |
 | `tooltip_description` | string \| absent | tooltip description text                                                                  |
+| `overlay_icon_handle` | string \| absent | overlay icon theme name (badge shown on top of the normal icon)                           |
 
 ### `MenuItem`
 
