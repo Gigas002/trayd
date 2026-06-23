@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 
 pub const V: u8 = 1;
 
+// Skip serializing `item_is_menu` when it is `false` (the common case).
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
 /// Consumer → daemon request.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IpcRequest {
@@ -128,6 +133,19 @@ pub struct MinimalTrayItem {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_handle: Option<String>,
+    /// Item category per SNI spec (e.g. `"ApplicationStatus"`, `"Communications"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// `true` when this item is a pure menu (no application window — should not activate).
+    /// Omitted from JSON when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub item_is_menu: bool,
+    /// Tooltip title text, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip_title: Option<String>,
+    /// Tooltip description text, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip_description: Option<String>,
 }
 
 /// One row in a DBusMenu tree.

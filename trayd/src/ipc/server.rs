@@ -215,6 +215,22 @@ fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
         },
         status: item.status.to_string(),
         icon_handle,
+        category: if item.category.is_empty() {
+            None
+        } else {
+            Some(item.category.clone())
+        },
+        item_is_menu: item.item_is_menu,
+        tooltip_title: if item.tool_tip.title.is_empty() {
+            None
+        } else {
+            Some(item.tool_tip.title.clone())
+        },
+        tooltip_description: if item.tool_tip.description.is_empty() {
+            None
+        } else {
+            Some(item.tool_tip.description.clone())
+        },
     }
 }
 
