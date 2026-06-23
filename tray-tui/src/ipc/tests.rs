@@ -102,6 +102,7 @@ fn minimal_tray_item_optional_fields_absent() {
     assert!(!item.item_is_menu, "item_is_menu must default to false");
     assert!(item.tooltip_title.is_none());
     assert!(item.tooltip_description.is_none());
+    assert!(item.overlay_icon_handle.is_none());
 }
 
 #[test]
@@ -115,7 +116,7 @@ fn minimal_tray_item_with_title_and_icon() {
 
 #[test]
 fn minimal_tray_item_new_fields_deserialize() {
-    let json = r#"{"app_id":"org.sysmenu","status":"Active","category":"SystemServices","item_is_menu":true,"tooltip_title":"System Menu","tooltip_description":"Click for options"}"#;
+    let json = r#"{"app_id":"org.sysmenu","status":"Active","category":"SystemServices","item_is_menu":true,"tooltip_title":"System Menu","tooltip_description":"Click for options","overlay_icon_handle":"emblem-default"}"#;
     let item: MinimalTrayItem = serde_json::from_str(json).unwrap();
     assert_eq!(item.category.as_deref(), Some("SystemServices"));
     assert!(item.item_is_menu);
@@ -124,4 +125,5 @@ fn minimal_tray_item_new_fields_deserialize() {
         item.tooltip_description.as_deref(),
         Some("Click for options")
     );
+    assert_eq!(item.overlay_icon_handle.as_deref(), Some("emblem-default"));
 }

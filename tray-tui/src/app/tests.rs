@@ -11,6 +11,7 @@ fn make_tray_item(app_id: &str) -> MinimalTrayItem {
         item_is_menu: false,
         tooltip_title: None,
         tooltip_description: None,
+        overlay_icon_handle: None,
     }
 }
 
