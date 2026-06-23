@@ -17,7 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `tool_tip` — tooltip title, description, and icon data.
 - **IPC `MinimalTrayItem`**: the wire type exposed by `get_items` / `subscribe` now
   includes `category` (string | absent), `item_is_menu` (bool, omitted when `false`),
-  `tooltip_title` (string | absent), and `tooltip_description` (string | absent).
+  `tooltip_title` (string | absent), `tooltip_description` (string | absent), and
+  `overlay_icon_handle` (string | absent).
   Existing clients are unaffected — the new fields default gracefully when absent.
 
 - **`trayctl subscribe`**: built-in CLI alternative to subscribing via the socket directly. Sends
