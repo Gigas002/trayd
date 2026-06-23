@@ -263,6 +263,7 @@ async fn minimal_tray_item_item_is_menu_omitted_when_false() {
         item_is_menu: false,
         tooltip_title: None,
         tooltip_description: None,
+        overlay_icon_handle: None,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -287,6 +288,7 @@ async fn minimal_tray_item_item_is_menu_present_when_true() {
         item_is_menu: true,
         tooltip_title: Some("Menu App Tooltip".into()),
         tooltip_description: Some("A tooltip description".into()),
+        overlay_icon_handle: Some("overlay-badge".into()),
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -300,5 +302,9 @@ async fn minimal_tray_item_item_is_menu_present_when_true() {
     assert!(
         json.contains(r#""tooltip_description":"A tooltip description""#),
         "tooltip_description must be present; got: {json}"
+    );
+    assert!(
+        json.contains(r#""overlay_icon_handle":"overlay-badge""#),
+        "overlay_icon_handle must be present; got: {json}"
     );
 }

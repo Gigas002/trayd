@@ -146,6 +146,9 @@ pub struct MinimalTrayItem {
     /// Tooltip description text, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tooltip_description: Option<String>,
+    /// Overlay icon theme name, if set (displayed on top of the normal icon).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlay_icon_handle: Option<String>,
 }
 
 /// One row in a DBusMenu tree.

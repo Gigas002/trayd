@@ -231,6 +231,7 @@ fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
         } else {
             Some(item.tool_tip.description.clone())
         },
+        overlay_icon_handle: item.overlay_icon.as_handle(),
     }
 }
 
