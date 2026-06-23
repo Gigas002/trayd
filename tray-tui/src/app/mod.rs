@@ -155,12 +155,12 @@ impl App {
             // whether `item_is_menu` is set.  Useful for items whose primary action
             // is activation but that also expose a context menu.
             KeyCode::Char('m') => {
-                if matches!(self.view, View::Items) {
-                    if let Some(item) = self.tray_items.get(self.items_cursor) {
-                        let action = Action::OpenMenu(item.app_id.clone());
-                        if let Err(e) = self.execute_action(action).await {
-                            self.status_msg = Some(format!("Error: {e}"));
-                        }
+                if matches!(self.view, View::Items)
+                    && let Some(item) = self.tray_items.get(self.items_cursor)
+                {
+                    let action = Action::OpenMenu(item.app_id.clone());
+                    if let Err(e) = self.execute_action(action).await {
+                        self.status_msg = Some(format!("Error: {e}"));
                     }
                 }
             }
