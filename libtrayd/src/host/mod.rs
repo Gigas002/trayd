@@ -600,29 +600,65 @@ async fn fetch_item_properties(
     object_path: &str,
     well_known_name: Option<&str>,
 ) -> TrayItem {
-    let title = proxy.title().await.unwrap_or_default();
-    let status = TrayStatus::from_dbus(&proxy.status().await.unwrap_or_default());
-    let icon_name = proxy.icon_name().await.unwrap_or_default();
+    let title = proxy.title().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch title");
+        String::new()
+    });
+    let status = TrayStatus::from_dbus(&proxy.status().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch status");
+        String::new()
+    }));
+    let icon_name = proxy.icon_name().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch icon_name");
+        String::new()
+    });
     // Priority: explicit `IconName` → well-known bus name (e.g. `org.telegram.desktop`)
     // → SNI `Id` as a last resort (e.g. `TelegramDesktop`).
-    let icon_name = resolve_icon_name(
-        icon_name,
-        well_known_name,
-        proxy.id().await.unwrap_or_default(),
-    );
-    let raw_pixmaps = proxy.icon_pixmap().await.unwrap_or_default();
-    let category = proxy.category().await.unwrap_or_default();
-    let item_is_menu = proxy.item_is_menu().await.unwrap_or(false);
-    let raw_tool_tip = proxy.tool_tip().await.unwrap_or_default();
-    let overlay_icon_name = proxy.overlay_icon_name().await.unwrap_or_default();
-    let raw_overlay_pixmaps = proxy.overlay_icon_pixmap().await.unwrap_or_default();
-    let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_default();
-    let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_default();
+    let sni_id = proxy.id().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch id");
+        String::new()
+    });
+    let icon_name = resolve_icon_name(icon_name, well_known_name, sni_id);
+    let raw_pixmaps = proxy.icon_pixmap().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch icon_pixmap");
+        Vec::new()
+    });
+    let category = proxy.category().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch category");
+        String::new()
+    });
+    let item_is_menu = proxy.item_is_menu().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch item_is_menu");
+        false
+    });
+    let raw_tool_tip = proxy.tool_tip().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch tool_tip");
+        Default::default()
+    });
+    let overlay_icon_name = proxy.overlay_icon_name().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch overlay_icon_name");
+        String::new()
+    });
+    let raw_overlay_pixmaps = proxy.overlay_icon_pixmap().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch overlay_icon_pixmap");
+        Vec::new()
+    });
+    let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch attention_icon_name");
+        String::new()
+    });
+    let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_else(|e| {
+        warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
+        Vec::new()
+    });
     let menu_path = proxy
         .menu_path()
         .await
         .map(|p| p.to_string())
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch menu_path");
+            String::new()
+        });
 
     let tool_tip = ToolTip {
         icon_name: raw_tool_tip.0,
@@ -812,24 +848,39 @@ async fn on_icon_changed(
     attention: bool,
     bus_name: &str,
 ) {
-    let icon_name = if attention {
-        proxy.attention_icon_name().await.unwrap_or_default()
+    let (icon_name, raw) = if attention {
+        let name = proxy.attention_icon_name().await.unwrap_or_else(|e| {
+            warn!(%e, %id, "failed to fetch attention_icon_name");
+            String::new()
+        });
+        let pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_else(|e| {
+            warn!(%e, %id, "failed to fetch attention_icon_pixmap");
+            Vec::new()
+        });
+        (name, pixmaps)
     } else {
-        let name = proxy.icon_name().await.unwrap_or_default();
+        let name = proxy.icon_name().await.unwrap_or_else(|e| {
+            warn!(%e, %id, "failed to fetch icon_name");
+            String::new()
+        });
         // Re-apply the same fallback used at registration time so that a
         // `NewIcon` signal can't clobber the resolved well-known name.
-        resolve_icon_name(
+        let sni_id = proxy.id().await.unwrap_or_else(|e| {
+            warn!(%e, %id, "failed to fetch id");
+            String::new()
+        });
+        let resolved = resolve_icon_name(
             name,
             lookup_well_known_name(&inner.conn, bus_name)
                 .await
                 .as_deref(),
-            proxy.id().await.unwrap_or_default(),
-        )
-    };
-    let raw = if attention {
-        proxy.attention_icon_pixmap().await.unwrap_or_default()
-    } else {
-        proxy.icon_pixmap().await.unwrap_or_default()
+            sni_id,
+        );
+        let pixmaps = proxy.icon_pixmap().await.unwrap_or_else(|e| {
+            warn!(%e, %id, "failed to fetch icon_pixmap");
+            Vec::new()
+        });
+        (resolved, pixmaps)
     };
     let new_icon = IconData {
         name: icon_name,
@@ -872,7 +923,10 @@ async fn on_title_changed(
     id: &ItemId,
     proxy: &StatusNotifierItemProxy<'_>,
 ) {
-    let title = proxy.title().await.unwrap_or_default();
+    let title = proxy.title().await.unwrap_or_else(|e| {
+        warn!(%e, %id, "failed to fetch title");
+        String::new()
+    });
     let event = {
         let mut state = inner.state.write().await;
         if let Some(item) = state.items.get_mut(id) {
@@ -954,8 +1008,14 @@ async fn on_overlay_icon_changed(
     id: &ItemId,
     proxy: &StatusNotifierItemProxy<'_>,
 ) {
-    let icon_name = proxy.overlay_icon_name().await.unwrap_or_default();
-    let raw = proxy.overlay_icon_pixmap().await.unwrap_or_default();
+    let icon_name = proxy.overlay_icon_name().await.unwrap_or_else(|e| {
+        warn!(%e, %id, "failed to fetch overlay_icon_name");
+        String::new()
+    });
+    let raw = proxy.overlay_icon_pixmap().await.unwrap_or_else(|e| {
+        warn!(%e, %id, "failed to fetch overlay_icon_pixmap");
+        Vec::new()
+    });
     let new_overlay = IconData {
         name: icon_name,
         pixmaps: raw
@@ -991,7 +1051,10 @@ async fn on_menu_path_changed(
         .menu_path()
         .await
         .map(|p| p.to_string())
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            warn!(%e, %id, "failed to fetch menu_path");
+            String::new()
+        });
 
     let event = {
         let mut state = inner.state.write().await;
