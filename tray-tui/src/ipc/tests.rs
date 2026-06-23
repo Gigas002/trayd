@@ -98,6 +98,10 @@ fn minimal_tray_item_optional_fields_absent() {
     assert_eq!(item.app_id, "org.nm");
     assert!(item.title.is_none());
     assert!(item.icon_handle.is_none());
+    assert!(item.category.is_none());
+    assert!(!item.item_is_menu, "item_is_menu must default to false");
+    assert!(item.tooltip_title.is_none());
+    assert!(item.tooltip_description.is_none());
 }
 
 #[test]
@@ -107,4 +111,17 @@ fn minimal_tray_item_with_title_and_icon() {
     let item: MinimalTrayItem = serde_json::from_str(json).unwrap();
     assert_eq!(item.title.as_deref(), Some("Network"));
     assert_eq!(item.icon_handle.as_deref(), Some("nm-active"));
+}
+
+#[test]
+fn minimal_tray_item_new_fields_deserialize() {
+    let json = r#"{"app_id":"org.sysmenu","status":"Active","category":"SystemServices","item_is_menu":true,"tooltip_title":"System Menu","tooltip_description":"Click for options"}"#;
+    let item: MinimalTrayItem = serde_json::from_str(json).unwrap();
+    assert_eq!(item.category.as_deref(), Some("SystemServices"));
+    assert!(item.item_is_menu);
+    assert_eq!(item.tooltip_title.as_deref(), Some("System Menu"));
+    assert_eq!(
+        item.tooltip_description.as_deref(),
+        Some("Click for options")
+    );
 }

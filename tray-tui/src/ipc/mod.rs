@@ -96,6 +96,18 @@ pub struct MinimalTrayItem {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_handle: Option<String>,
+    /// Item category per SNI spec.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// `true` when this item is a pure menu (no application window — should not activate).
+    #[serde(default)]
+    pub item_is_menu: bool,
+    /// Tooltip title text, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip_title: Option<String>,
+    /// Tooltip description text, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
