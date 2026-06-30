@@ -23,6 +23,7 @@ use zbus::zvariant::OwnedValue;
 
 use crate::{
     TraydError,
+    dbus::watcher::SharedWatcherInner,
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
     model::{
         HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
@@ -44,6 +45,10 @@ struct HostState {
     /// Derived pixmap cache: `(app_id, requested_size_px)` → best-matched ARGB32 bytes.
     /// Invalidated on icon change signals and item removal.
     pixmap_cache: HashMap<(ItemId, u16), PixmapData>,
+    /// Per-item signal-watcher task handles.  Aborted when the item is removed so
+    /// that the proxy, its property-cache task, and all signal subscriptions are
+    /// cleaned up immediately rather than leaking until the process is restarted.
+    item_tasks: HashMap<ItemId, tokio::task::JoinHandle<()>>,
 }
 
 impl HostState {
@@ -51,12 +56,22 @@ impl HostState {
         Self {
             items: HashMap::new(),
             pixmap_cache: HashMap::new(),
+            item_tasks: HashMap::new(),
         }
     }
 
     /// Remove all pixmap cache entries for `id`.
     fn invalidate_pixmap_cache(&mut self, id: &ItemId) {
         self.pixmap_cache.retain(|(item_id, _), _| item_id != id);
+    }
+
+    /// Remove an item and abort its associated signal-watcher task.
+    fn remove_item(&mut self, id: &ItemId) {
+        self.items.remove(id);
+        self.invalidate_pixmap_cache(id);
+        if let Some(handle) = self.item_tasks.remove(id) {
+            handle.abort();
+        }
     }
 }
 
@@ -66,6 +81,10 @@ struct TrayHostInner {
     state: RwLock<HostState>,
     events_tx: broadcast::Sender<HostEvent>,
     conn: zbus::Connection,
+    /// Shared watcher state, used to prune stale service-id entries when a
+    /// bus name disappears so the `RegisteredStatusNotifierItems` property
+    /// stays accurate.
+    watcher_inner: SharedWatcherInner,
 }
 
 // ─── TrayHost ─────────────────────────────────────────────────────────────────
@@ -90,7 +109,7 @@ impl TrayHost {
     pub async fn start() -> Result<Self, TraydError> {
         // Internal channel: watcher D-Bus object → host background loop.
         let (watcher_tx, watcher_rx) = mpsc::channel::<WatcherMsg>(32);
-        let watcher = StatusNotifierWatcher::new(watcher_tx);
+        let (watcher, watcher_inner) = StatusNotifierWatcher::new(watcher_tx);
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
@@ -107,6 +126,7 @@ impl TrayHost {
             state: RwLock::new(HostState::new()),
             events_tx: events_tx.clone(),
             conn: conn.clone(),
+            watcher_inner,
         });
 
         let host = TrayHost {
@@ -522,18 +542,21 @@ async fn handle_item_registered(
     .await;
     let id = item.id.clone();
 
-    inner.state.write().await.items.insert(id, item.clone());
-    let _ = inner.events_tx.send(HostEvent::ItemAdded(item));
-    debug!(%service_id, "item added to cache");
-
-    // Spawn a per-item signal watcher to keep the cache fresh.
-    tokio::spawn(run_item_signal_watcher(
+    // Spawn a per-item signal watcher to keep the cache fresh, then store
+    // the handle so it can be aborted when the item is removed.
+    let handle = tokio::spawn(run_item_signal_watcher(
         conn.clone(),
         Arc::clone(inner),
-        ItemId(service_id.to_owned()),
+        id.clone(),
         bus_name.to_owned(),
         object_path.to_owned(),
     ));
+
+    let mut state = inner.state.write().await;
+    state.item_tasks.insert(id.clone(), handle);
+    state.items.insert(id, item.clone());
+    let _ = inner.events_tx.send(HostEvent::ItemAdded(item));
+    debug!(%service_id, "item added to cache");
 }
 
 // ─── Name-owner-change handler ────────────────────────────────────────────────
@@ -564,9 +587,20 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
         .map(|item| item.id.clone())
         .collect();
 
+    if ids_to_remove.is_empty() {
+        return;
+    }
+
+    // Also prune the watcher's registered-items list so the D-Bus property
+    // reflects reality and so that the service can re-register cleanly if it
+    // reconnects under a new unique bus name.
+    {
+        let mut watcher = inner.watcher_inner.lock().await;
+        watcher.items.retain(|svc| !svc.starts_with(&gone));
+    }
+
     for id in ids_to_remove {
-        state.items.remove(&id);
-        state.invalidate_pixmap_cache(&id);
+        state.remove_item(&id);
         let _ = inner.events_tx.send(HostEvent::ItemRemoved(id.clone()));
         debug!(%id, %gone, "item removed from cache");
     }
@@ -627,10 +661,11 @@ async fn fetch_item_properties(
         warn!(%e, %service_id, "failed to fetch category");
         String::new()
     });
-    let item_is_menu = proxy.item_is_menu().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch item_is_menu");
-        false
-    });
+    // Defer resolving item_is_menu until after menu_path is known — if the
+    // property is absent (e.g. Ayatana/AppIndicator items like nm-applet) we
+    // fall back to "true" whenever a valid menu path exists, which prevents a
+    // crash from calling Activate on an item that only exposes a menu.
+    let item_is_menu_result = proxy.item_is_menu().await;
     let raw_tool_tip = proxy.tool_tip().await.unwrap_or_else(|e| {
         warn!(%e, %service_id, "failed to fetch tool_tip");
         Default::default()
@@ -659,6 +694,15 @@ async fn fetch_item_properties(
             warn!(%e, %service_id, "failed to fetch menu_path");
             String::new()
         });
+
+    let item_is_menu = item_is_menu_result.unwrap_or_else(|e| {
+        // If the property is unavailable, infer from the menu path: an item
+        // that exposes a menu but doesn't declare ItemIsMenu is treated as
+        // menu-only so we never call Activate on it by mistake.
+        let has_menu = !menu_path.is_empty() && menu_path != "/";
+        warn!(%e, %service_id, has_menu, "failed to fetch item_is_menu, inferring from menu_path");
+        has_menu
+    });
 
     let tool_tip = ToolTip {
         icon_name: raw_tool_tip.0,
