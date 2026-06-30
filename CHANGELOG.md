@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`libtrayd`**: resource leak causing `Too many open files (EMFILE)` crash after 15–45 minutes
+  of runtime. Per-item `run_item_signal_watcher` tasks were never cancelled when the owning bus
+  name disappeared: each task held a live `StatusNotifierItemProxy`, a property-cache background
+  task, and 7 D-Bus signal subscriptions that accumulated without bound as services disconnected
+  and reconnected (e.g. Steam cycling its tray icon). Fix:
+  - `HostState` now stores a `JoinHandle` per item; the handle is aborted via
+    `HostState::remove_item()` when `NameOwnerChanged` signals the bus name is gone. Aborting
+    the task drops the proxy, which in turn aborts the property-cache task and queues
+    `RemoveMatch` for all held signal subscriptions.
+  - `StatusNotifierWatcher::new` returns the shared `Arc<Mutex<WatcherInner>>` so the host loop
+    can also prune stale `RegisteredStatusNotifierItems` entries for the gone bus name, allowing
+    services to re-register cleanly under a new unique name after a restart.
+
 ### Added
 
 - **`libtrayd` / `trayd` / `trayctl`**: `TrayItem` now carries three new SNI fields read

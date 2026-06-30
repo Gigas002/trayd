@@ -5,6 +5,8 @@
 //! `RegisterStatusNotifierItem` on it; the watcher forwards registrations to
 //! [`TrayHost`](crate::host::TrayHost) via an internal mpsc channel.
 
+use std::sync::Arc;
+
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
 use zbus::{interface, object_server::SignalEmitter};
@@ -29,26 +31,34 @@ pub enum WatcherMsg {
 
 // ─── Internal watcher state ──────────────────────────────────────────────────
 
-struct Inner {
-    items: Vec<String>,
+pub struct WatcherInner {
+    pub items: Vec<String>,
 }
 
-// ─── StatusNotifierWatcher ───────────────────────────────────────────────────
+/// Shared, mutable watcher state.  Also held by the tray host so it can remove
+/// stale entries when bus names disappear.
+pub type SharedWatcherInner = Arc<Mutex<WatcherInner>>;
+
+// ─── StatusNotifierWatcher ───────────────────────────────────────────────────────
 
 /// D-Bus implementation of `org.kde.StatusNotifierWatcher`.
 ///
 /// Registered at `/StatusNotifierWatcher` via [`zbus::ObjectServer`].
 pub struct StatusNotifierWatcher {
-    inner: Mutex<Inner>,
+    inner: SharedWatcherInner,
     msg_tx: mpsc::Sender<WatcherMsg>,
 }
 
 impl StatusNotifierWatcher {
-    pub fn new(msg_tx: mpsc::Sender<WatcherMsg>) -> Self {
-        Self {
-            inner: Mutex::new(Inner { items: Vec::new() }),
+    /// Create a new watcher and return it together with the shared inner state
+    /// so that the host loop can remove stale entries when services disappear.
+    pub fn new(msg_tx: mpsc::Sender<WatcherMsg>) -> (Self, SharedWatcherInner) {
+        let inner = Arc::new(Mutex::new(WatcherInner { items: Vec::new() }));
+        let watcher = Self {
+            inner: Arc::clone(&inner),
             msg_tx,
-        }
+        };
+        (watcher, inner)
     }
 }
 
