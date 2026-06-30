@@ -35,7 +35,7 @@ pub struct WatcherInner {
     pub items: Vec<String>,
 }
 
-/// Shared, mutable watcher state.  Also held by [`TrayHost`] so it can remove
+/// Shared, mutable watcher state.  Also held by the tray host so it can remove
 /// stale entries when bus names disappear.
 pub type SharedWatcherInner = Arc<Mutex<WatcherInner>>;
 
