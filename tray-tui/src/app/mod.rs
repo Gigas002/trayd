@@ -3,13 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -444,8 +444,8 @@ async fn run_subscribe(
 
 fn input_task(tx: mpsc::Sender<Event>) {
     loop {
-        match crossterm::event::poll(Duration::from_millis(100)) {
-            Ok(true) => match crossterm::event::read() {
+        match event::poll(Duration::from_millis(100)) {
+            Ok(true) => match event::read() {
                 Ok(event) => {
                     if tx.blocking_send(event).is_err() {
                         break;
