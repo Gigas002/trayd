@@ -149,8 +149,11 @@ impl StatusNotifierWatcher {
         service: &str,
     ) -> zbus::Result<()>;
 
+    /// Emitted when a previously registered `StatusNotifierItem` disappears
+    /// from the bus.  Called from [`crate::host`] after it prunes the stale
+    /// entry from the shared [`WatcherInner::items`] list.
     #[zbus(signal)]
-    async fn status_notifier_item_unregistered(
+    pub(crate) async fn status_notifier_item_unregistered(
         emitter: &SignalEmitter<'_>,
         service: &str,
     ) -> zbus::Result<()>;
