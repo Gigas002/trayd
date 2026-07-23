@@ -19,7 +19,7 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
-use zbus::zvariant::OwnedValue;
+use zbus::{object_server::SignalEmitter, zvariant::ObjectPath, zvariant::OwnedValue};
 
 use crate::{
     TraydError,
@@ -593,16 +593,52 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
 
     // Also prune the watcher's registered-items list so the D-Bus property
     // reflects reality and so that the service can re-register cleanly if it
-    // reconnects under a new unique bus name.
-    {
+    // reconnects under a new unique bus name.  Collect what was actually
+    // removed (not just `ids_to_remove`, which only reflects the host's own
+    // item cache) so we can emit `StatusNotifierItemUnregistered` for each
+    // per the SNI watcher spec.
+    let removed_services: Vec<String> = {
         let mut watcher = inner.watcher_inner.lock().await;
-        watcher.items.retain(|svc| !svc.starts_with(&gone));
-    }
+        let drained = std::mem::take(&mut watcher.items);
+        let (removed, kept): (Vec<String>, Vec<String>) =
+            drained.into_iter().partition(|svc| svc.starts_with(&gone));
+        watcher.items = kept;
+        removed
+    };
 
     for id in ids_to_remove {
         state.remove_item(&id);
         let _ = inner.events_tx.send(HostEvent::ItemRemoved(id.clone()));
         debug!(%id, %gone, "item removed from cache");
+    }
+
+    if removed_services.is_empty() {
+        return;
+    }
+
+    let path = match ObjectPath::from_static_str(SNI_WATCHER_PATH) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(%e, "invalid watcher object path; skipping StatusNotifierItemUnregistered");
+            return;
+        }
+    };
+    let emitter = match SignalEmitter::new(&inner.conn, path) {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(
+                %e,
+                "failed to create signal emitter; skipping StatusNotifierItemUnregistered"
+            );
+            return;
+        }
+    };
+    for service in &removed_services {
+        if let Err(e) =
+            StatusNotifierWatcher::status_notifier_item_unregistered(&emitter, service).await
+        {
+            warn!(%e, %service, "failed to emit StatusNotifierItemUnregistered");
+        }
     }
 }
 
