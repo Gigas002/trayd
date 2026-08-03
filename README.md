@@ -2,18 +2,7 @@
 
 Minimal Wayland-session system tray daemon (`zbus`) with a documented IPC socket for bars and other clients.
 
-## Workspace
-
-| Crate      | Role                                                           |
-| ---------- | -------------------------------------------------------------- |
-| `libtrayd` | D-Bus SNI host + DBusMenu client (library, used by trayd only) |
-| `trayd`    | Persistent daemon — D-Bus host + Unix-socket IPC server        |
-| `trayctl`  | One-shot menu orchestrator (IPC client + dmenu bridge)         |
-| `tray-tui` | Terminal UI client (IPC socket only)                           |
-
-See [`docs/IPC.md`](docs/IPC.md) for the wire protocol.
-
----
+![](examples/preview.png)
 
 ## Architecture
 
@@ -44,16 +33,6 @@ flowchart LR
 | **tray-tui** | ratatui terminal UI over IPC             | On-demand              | **Never**                    |
 | **client**   | Any consumer of the IPC socket           | Any                    | User-defined                 |
 
----
-
-## Build
-
-```sh
-cargo build --workspace
-```
-
----
-
 ## Running
 
 ### 1. Start the daemon
@@ -65,8 +44,7 @@ trayd run
 ```
 
 By default the daemon listens on `$XDG_RUNTIME_DIR/trayd.sock`.
-To use a custom socket or log level, copy `examples/trayd.toml` to
-`$XDG_CONFIG_HOME/trayd/trayd.toml` and edit it.
+To use a custom socket or log level, copy `examples/trayd.toml` to `$XDG_CONFIG_HOME/trayd/trayd.toml` and edit it.
 
 Health-check while the daemon is running:
 
@@ -99,9 +77,7 @@ Output is a JSON array of `MinimalTrayItem` objects:
 trayctl subscribe
 ```
 
-A built-in CLI alternative to subscribing via the socket directly. Sends a `subscribe` request
-and streams tray-state events as NDJSON to stdout — one line per update, each line being a JSON
-array of `MinimalTrayItem` objects. Exits cleanly when the daemon closes the connection.
+A built-in CLI alternative to subscribing via the socket directly. Sends a `subscribe` request and streams tray-state events as NDJSON to stdout — one line per update, each line being a JSON array of `MinimalTrayItem` objects. Exits cleanly when the daemon closes the connection.
 
 ```json
 [{"app_id":"org.freedesktop.NetworkManager.applet","title":"Network","status":"Active","icon_handle":"nm-device-wireless"}]
@@ -116,8 +92,7 @@ trayctl subscribe | while IFS= read -r line; do
 done
 ```
 
-For custom clients that speak the IPC protocol directly, the raw `subscribe` command on the socket
-remains fully supported — see [`docs/IPC.md`](docs/IPC.md).
+For custom clients that speak the IPC protocol directly, the raw `subscribe` command on the socket remains fully supported — see [`docs/IPC.md`](docs/IPC.md).
 
 ### 4. Open a tray menu with tofi
 
