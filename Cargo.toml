@@ -12,7 +12,7 @@ repository = "https://github.com/Gigas002/trayd"
 version = "0.1.1"
 
 [workspace.dependencies]
-base64-ng = "1"
+base64-ng = "2"
 clap = { version = "4", features = ["derive"] }
 libtrayd = { path = "libtrayd" }
 serde = { version = "1", features = ["derive"] }
