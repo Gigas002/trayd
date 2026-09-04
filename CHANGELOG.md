@@ -5,8 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-04
+
 ### Fixed
 
+- **`libtrayd`**: `StatusNotifierWatcher` now emits the `StatusNotifierItemUnregistered` signal
+  (per the SNI watcher spec) for each service pruned from `WatcherInner::items` when its bus
+  name disappears, instead of only updating internal state silently.
+- **`tray-tui`**: dropped the explicit `crossterm` dependency in favor of `ratatui`'s bundled
+  `crossterm` feature, avoiding a version mismatch between the two crates.
 - **`libtrayd`**: resource leak causing `Too many open files (EMFILE)` crash after 15–45 minutes
   of runtime. Per-item `run_item_signal_watcher` tasks were never cancelled when the owning bus
   name disappeared: each task held a live `StatusNotifierItemProxy`, a property-cache background
@@ -40,6 +47,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a `subscribe` request and streams tray-state updates as NDJSON to stdout — one line per event,
   each line a JSON array of `MinimalTrayItem` objects. Exits cleanly when the daemon closes the
   connection. The raw socket `subscribe` command remains fully supported for custom clients.
+
+### Docs
+
+- `docs/ARCHITECTURE.md`: overview of the workspace crates and how the daemon, host, and clients
+  fit together.
 
 ## [0.1.1] - 2026-06-02
 
