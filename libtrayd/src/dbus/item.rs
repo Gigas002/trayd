@@ -88,7 +88,7 @@ pub trait StatusNotifierItem {
     ///
     /// Returns `"/"` when the item has no menu.
     #[zbus(property, name = "Menu")]
-    fn menu_path(&self) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+    fn menu_path(&self) -> zbus::Result<zbus::OwnedObjectPath>;
 
     // ── Signals ───────────────────────────────────────────────────────────────
 

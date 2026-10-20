@@ -19,7 +19,7 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
-use zbus::{object_server::SignalEmitter, zvariant::ObjectPath, zvariant::OwnedValue};
+use zbus::{ObjectPath, OwnedVariant, object_server::SignalEmitter};
 
 use crate::{
     TraydError,
@@ -113,9 +113,9 @@ impl TrayHost {
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
-        let conn = zbus::connection::Builder::session()?
-            .serve_at(SNI_WATCHER_PATH, watcher)?
-            .name(SNI_WATCHER_NAME)?
+        let conn = zbus::connection::Builder::session()
+            .serve_at(SNI_WATCHER_PATH, watcher)
+            .name(SNI_WATCHER_NAME)
             .build()
             .await?;
         info!("claimed D-Bus name {SNI_WATCHER_NAME}; watcher at {SNI_WATCHER_PATH}");
@@ -293,12 +293,7 @@ impl TrayHost {
 
             let proxy = build_menu_proxy(&self.inner.conn, &bus_name, &menu_path).await?;
             proxy
-                .event(
-                    item_id as i32,
-                    "clicked",
-                    zbus::zvariant::Value::from(0i32),
-                    0,
-                )
+                .event(item_id as i32, "clicked", zbus::Variant::from(0i32), 0)
                 .await
                 .map_err(|e| TraydError::ActivationFailed {
                     app_id: id.to_string(),
@@ -391,8 +386,8 @@ async fn build_proxy<'c>(
     object_path: &'c str,
 ) -> Result<StatusNotifierItemProxy<'c>, TraydError> {
     StatusNotifierItemProxy::builder(conn)
-        .destination(bus_name)?
-        .path(object_path)?
+        .destination(bus_name)
+        .path(object_path)
         .build()
         .await
         .map_err(TraydError::DBus)
@@ -404,8 +399,8 @@ async fn build_menu_proxy<'c>(
     menu_path: &str,
 ) -> Result<DBusMenuProxy<'c>, TraydError> {
     DBusMenuProxy::builder(conn)
-        .destination(bus_name.to_owned())?
-        .path(menu_path.to_owned())?
+        .destination(bus_name.to_owned())
+        .path(menu_path.to_owned())
         .build()
         .await
         .map_err(TraydError::DBus)
@@ -415,15 +410,15 @@ async fn build_menu_proxy<'c>(
 
 /// Convert the `av` children array from a `GetLayout` response into [`MenuNode`]s.
 ///
-/// Each `OwnedValue` in the array is a D-Bus variant containing
+/// Each `OwnedVariant` in the array is a D-Bus variant containing
 /// `(i32 id, a{sv} properties, av children)`.
-pub(crate) fn menu_nodes_from_av(children: Vec<OwnedValue>) -> Vec<MenuNode> {
+pub(crate) fn menu_nodes_from_av(children: Vec<OwnedVariant>) -> Vec<MenuNode> {
     children.into_iter().filter_map(parse_child_ov).collect()
 }
 
-fn parse_child_ov(ov: OwnedValue) -> Option<MenuNode> {
+fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     // Deserialize the child structure (i32, a{sv}, av) via TryFrom.
-    let (id, props, nested_children): (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>) =
+    let (id, props, nested_children): (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>) =
         ov.try_into().ok()?;
 
     let label = get_str_prop(&props, "label");
@@ -446,14 +441,14 @@ fn parse_child_ov(ov: OwnedValue) -> Option<MenuNode> {
     })
 }
 
-pub(crate) fn get_str_prop(props: &HashMap<String, OwnedValue>, key: &str) -> String {
+pub(crate) fn get_str_prop(props: &HashMap<String, OwnedVariant>, key: &str) -> String {
     props
         .get(key)
         .and_then(|v| String::try_from(v.clone()).ok())
         .unwrap_or_default()
 }
 
-pub(crate) fn get_bool_prop(props: &HashMap<String, OwnedValue>, key: &str) -> Option<bool> {
+pub(crate) fn get_bool_prop(props: &HashMap<String, OwnedVariant>, key: &str) -> Option<bool> {
     props.get(key).and_then(|v| bool::try_from(v.clone()).ok())
 }
 

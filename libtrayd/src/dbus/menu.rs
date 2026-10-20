@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use zbus::zvariant::{self, OwnedValue};
+use zbus::{OwnedVariant, Variant};
 
 /// Proxy for the `com.canonical.dbusmenu` D-Bus interface.
 ///
@@ -22,12 +22,12 @@ pub trait DBusMenu {
     /// Fire an event on a menu item.
     ///
     /// Common `event_id` values: `"clicked"`, `"hovered"`, `"opened"`, `"closed"`.
-    /// Pass `zvariant::Value::from(0i32)` for `data` when unused.
+    /// Pass `zbus::Variant::from(0i32)` for `data` when unused.
     async fn event(
         &self,
         id: i32,
         event_id: &str,
-        data: zvariant::Value<'_>,
+        data: Variant<'_>,
         timestamp: u32,
     ) -> zbus::Result<()>;
 
@@ -44,7 +44,7 @@ pub trait DBusMenu {
         parent_id: i32,
         recursion_depth: i32,
         property_names: &[&str],
-    ) -> zbus::Result<(u32, (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>))>;
+    ) -> zbus::Result<(u32, (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>))>;
 
     /// Emitted when the menu layout changes.
     #[zbus(signal)]
