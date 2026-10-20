@@ -122,32 +122,34 @@ fn menu_nodes_from_av_empty_slice() {
 
 #[test]
 fn get_str_prop_missing_key_returns_empty() {
-    let props: std::collections::HashMap<String, zbus::zvariant::OwnedValue> = Default::default();
+    let props: std::collections::HashMap<String, zbus::OwnedVariant> = Default::default();
     assert_eq!(get_str_prop(&props, "label"), "");
 }
 
 #[test]
 fn get_str_prop_with_string_value() {
-    use zbus::zvariant::{OwnedValue, Value};
-    let mut props: std::collections::HashMap<String, OwnedValue> = Default::default();
-    let ov: OwnedValue = Value::from("Hello")
+    use zbus::{OwnedVariant, Variant};
+    let mut props: std::collections::HashMap<String, OwnedVariant> = Default::default();
+    let ov: OwnedVariant = Variant::from("Hello")
         .try_into()
-        .expect("OwnedValue from str");
+        .expect("OwnedVariant from str");
     props.insert("label".to_owned(), ov);
     assert_eq!(get_str_prop(&props, "label"), "Hello");
 }
 
 #[test]
 fn get_bool_prop_missing_key_returns_none() {
-    let props: std::collections::HashMap<String, zbus::zvariant::OwnedValue> = Default::default();
+    let props: std::collections::HashMap<String, zbus::OwnedVariant> = Default::default();
     assert_eq!(get_bool_prop(&props, "enabled"), None);
 }
 
 #[test]
 fn get_bool_prop_with_true() {
-    use zbus::zvariant::{OwnedValue, Value};
-    let mut props: std::collections::HashMap<String, OwnedValue> = Default::default();
-    let ov: OwnedValue = Value::from(true).try_into().expect("OwnedValue from bool");
+    use zbus::{OwnedVariant, Variant};
+    let mut props: std::collections::HashMap<String, OwnedVariant> = Default::default();
+    let ov: OwnedVariant = Variant::from(true)
+        .try_into()
+        .expect("OwnedVariant from bool");
     props.insert("enabled".to_owned(), ov);
     assert_eq!(get_bool_prop(&props, "enabled"), Some(true));
 }
