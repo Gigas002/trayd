@@ -39,6 +39,6 @@ async fn main() -> ExitCode {
 async fn run(command: Option<Command>, config: Config) -> Result<(), TraydBinError> {
     match command.unwrap_or(Command::Run) {
         Command::Run => daemon::run(&config).await,
-        Command::Ping => ipc::ping(&config.socket_path).await,
+        Command::Ping => ipc::ping(&config.socket_path()?).await,
     }
 }

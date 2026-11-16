@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -26,14 +27,31 @@ impl IpcServer {
     }
 
     pub async fn run(&self) -> Result<(), TraydBinError> {
-        let _ = std::fs::remove_file(&self.socket_path);
+        prepare_socket_path(&self.socket_path)?;
         let listener = UnixListener::bind(&self.socket_path)?;
+        // Only this user may talk to the daemon, wherever the socket lives.
+        std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))?;
         tracing::info!(path = %self.socket_path.display(), "IPC server listening");
         loop {
             let (stream, _) = listener.accept().await?;
             let host = self.host.clone();
             tokio::spawn(handle_connection(stream, host));
         }
+    }
+}
+
+/// Make `path` free for binding: remove a stale socket left by a daemon that
+/// did not shut down cleanly, but never anything else.
+///
+/// # Errors
+///
+/// [`TraydBinError::SocketPathTaken`] when a non-socket file is in the way.
+pub fn prepare_socket_path(path: &Path) -> Result<(), TraydBinError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => Ok(std::fs::remove_file(path)?),
+        Ok(_) => Err(TraydBinError::SocketPathTaken(path.display().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 

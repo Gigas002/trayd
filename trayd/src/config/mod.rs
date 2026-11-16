@@ -8,17 +8,13 @@ use crate::error::TraydBinError;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    /// Unix socket path for the IPC server.
-    #[serde(default = "default_socket_path")]
-    pub socket_path: PathBuf,
+    /// Unix socket path for the IPC server; see [`Config::socket_path`].
+    #[serde(default)]
+    pub socket_path: Option<PathBuf>,
 
     /// Tracing filter string (overridden by `RUST_LOG`).
     #[serde(default = "default_log_filter")]
     pub log_filter: String,
-}
-
-fn default_socket_path() -> PathBuf {
-    crate::ipc::default_socket_path()
 }
 
 fn default_log_filter() -> String {
@@ -28,7 +24,7 @@ fn default_log_filter() -> String {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            socket_path: default_socket_path(),
+            socket_path: None,
             log_filter: default_log_filter(),
         }
     }
@@ -59,6 +55,21 @@ impl Config {
         Ok(Self::default())
     }
 
+    /// The IPC socket: `socket_path` from the config, else
+    /// `$XDG_RUNTIME_DIR/trayd.sock`.
+    ///
+    /// # Errors
+    ///
+    /// When neither is set. There is deliberately no `/tmp` fallback: any
+    /// local user could create that path first, and the clients would not
+    /// look there anyway.
+    pub fn socket_path(&self) -> Result<PathBuf, TraydBinError> {
+        resolve_socket_path(
+            self.socket_path.as_deref(),
+            std::env::var_os("XDG_RUNTIME_DIR"),
+        )
+    }
+
     /// `$XDG_CONFIG_HOME/trayd/trayd.toml` (falls back to `~/.config/…`).
     pub fn xdg_path() -> PathBuf {
         let base = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
@@ -66,6 +77,22 @@ impl Config {
             format!("{home}/.config")
         });
         PathBuf::from(base).join("trayd").join("trayd.toml")
+    }
+}
+
+/// [`Config::socket_path`] without reading the environment.
+pub fn resolve_socket_path(
+    configured: Option<&Path>,
+    runtime_dir: Option<std::ffi::OsString>,
+) -> Result<PathBuf, TraydBinError> {
+    if let Some(path) = configured {
+        return Ok(path.to_owned());
+    }
+    match runtime_dir {
+        Some(dir) if !dir.is_empty() => Ok(PathBuf::from(dir).join("trayd.sock")),
+        _ => Err(TraydBinError::Config(
+            "XDG_RUNTIME_DIR is not set; set it or socket_path in trayd.toml".into(),
+        )),
     }
 }
 

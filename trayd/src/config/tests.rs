@@ -3,7 +3,7 @@ use super::Config;
 #[test]
 fn defaults_are_sensible() {
     let cfg = Config::default();
-    assert!(cfg.socket_path.file_name().unwrap() == "trayd.sock");
+    assert_eq!(cfg.socket_path, None);
     assert!(!cfg.log_filter.is_empty());
 }
 
@@ -14,21 +14,40 @@ socket_path = "/tmp/test.sock"
 log_filter  = "debug"
 "#;
     let cfg: Config = toml::from_str(toml).unwrap();
-    assert_eq!(cfg.socket_path.to_str().unwrap(), "/tmp/test.sock");
+    assert_eq!(
+        cfg.socket_path.as_deref(),
+        Some(std::path::Path::new("/tmp/test.sock"))
+    );
     assert_eq!(cfg.log_filter, "debug");
 }
 
 #[test]
 fn missing_fields_fall_back_to_defaults() {
     let cfg: Config = toml::from_str("").unwrap();
-    assert!(cfg.socket_path.ends_with("trayd.sock"));
+    assert_eq!(cfg.socket_path, None);
     assert!(!cfg.log_filter.is_empty());
 }
 
 #[test]
-fn load_returns_defaults_when_no_file() {
-    let cfg = Config::load(None).unwrap();
-    assert!(cfg.socket_path.ends_with("trayd.sock"));
+fn socket_path_prefers_config_then_runtime_dir() {
+    use super::resolve_socket_path;
+    use std::path::Path;
+    let configured = Path::new("/run/custom.sock");
+    assert_eq!(
+        resolve_socket_path(Some(configured), Some("/run/user/1".into())).unwrap(),
+        configured
+    );
+    assert_eq!(
+        resolve_socket_path(None, Some("/run/user/1".into())).unwrap(),
+        Path::new("/run/user/1/trayd.sock")
+    );
+}
+
+#[test]
+fn socket_path_never_falls_back_to_tmp() {
+    use super::resolve_socket_path;
+    assert!(resolve_socket_path(None, None).is_err());
+    assert!(resolve_socket_path(None, Some("".into())).is_err());
 }
 
 #[test]

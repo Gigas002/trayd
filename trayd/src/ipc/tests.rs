@@ -385,3 +385,33 @@ async fn codec_rejects_lines_over_the_limit() {
     let mut reader = BufReader::new(&long[..]);
     assert!(codec::read_request(&mut reader).await.is_err());
 }
+
+#[test]
+fn prepare_socket_path_replaces_only_sockets() {
+    use super::server::prepare_socket_path;
+    let dir = std::env::temp_dir().join(format!("trayd-prep-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let file = dir.join("precious.txt");
+    std::fs::write(&file, "keep me").unwrap();
+    assert!(prepare_socket_path(&file).is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
+
+    let stale = dir.join("stale.sock");
+    drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+    prepare_socket_path(&stale).unwrap();
+    assert!(!stale.exists());
+
+    prepare_socket_path(&dir.join("absent.sock")).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn socket_is_private_to_the_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(srv) = start_server("mode").await else {
+        return;
+    };
+    let mode = std::fs::metadata(&srv.path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}

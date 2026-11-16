@@ -26,6 +26,9 @@ pub enum TraydBinError {
     #[error("unexpected IPC response")]
     UnexpectedResponse,
 
+    #[error("{0} exists and is not a socket; refusing to replace it")]
+    SocketPathTaken(String),
+
     #[error("request longer than {} bytes", crate::ipc::codec::MAX_REQUEST_LEN)]
     RequestTooLong,
 }
