@@ -14,11 +14,6 @@ use self::codec as ipc_codec;
 use self::protocol::{Cmd, IpcRequest, IpcResponse, OkPayload};
 use crate::error::TraydBinError;
 
-pub fn default_socket_path() -> std::path::PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    std::path::PathBuf::from(dir).join("trayd.sock")
-}
-
 pub async fn ping(socket_path: &Path) -> Result<(), TraydBinError> {
     let stream = UnixStream::connect(socket_path)
         .await

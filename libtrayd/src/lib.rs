@@ -1,5 +1,7 @@
 //! Tray host library: D-Bus StatusNotifier + DBusMenu (no IPC, no CLI).
 
+#![forbid(unsafe_code)]
+
 pub mod dbus;
 pub mod error;
 pub mod host;

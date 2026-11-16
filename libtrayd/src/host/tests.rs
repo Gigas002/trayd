@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{IconData, ItemId, PixmapData, ToolTip, TrayItem, TrayStatus};
+use crate::model::{IconData, ItemId, ToolTip, TrayItem, TrayStatus};
 
 // ─── resolve_icon_name ────────────────────────────────────────────────────────────────
 
@@ -102,16 +102,6 @@ fn host_state_multiple_items() {
     assert_eq!(state.items.len(), 3);
 }
 
-/// Live D-Bus tests — skipped in CI, run manually:
-///   cargo test --package libtrayd -- host::tests::live --ignored
-#[tokio::test]
-#[ignore]
-async fn live_tray_host_start() {
-    let host = TrayHost::start().await.expect("TrayHost::start failed");
-    let items = host.items().await;
-    println!("registered items: {items:?}");
-}
-
 // ─── menu_nodes_from_av / prop helpers ───────────────────────────────────────
 
 #[test]
@@ -154,99 +144,6 @@ fn get_bool_prop_with_true() {
     assert_eq!(get_bool_prop(&props, "enabled"), Some(true));
 }
 
-/// Live D-Bus test for get_menu — skipped in CI.
-#[tokio::test]
-#[ignore = "requires D-Bus session bus with a registered tray item that has a menu"]
-async fn live_get_menu_top_level() {
-    let host = TrayHost::start().await.expect("TrayHost::start failed");
-    let items = host.items().await;
-    let item = items
-        .iter()
-        .find(|i| !i.menu_path.is_empty() && i.menu_path != "/")
-        .expect("no item with a menu found");
-    println!("testing menu for: {}", item.id);
-    let nodes = host
-        .get_menu(&item.id, None)
-        .await
-        .expect("get_menu failed");
-    println!("menu nodes: {nodes:#?}");
-    assert!(!nodes.is_empty(), "expected at least one menu item");
-}
-
-// ─── Pixmap cache ────────────────────────────────────────────────────────────────
-
-#[test]
-fn host_state_pixmap_cache_empty_initially() {
-    let state = HostState::new();
-    assert!(state.pixmap_cache.is_empty());
-}
-
-#[test]
-fn host_state_pixmap_cache_insert_and_retrieve() {
-    let mut state = HostState::new();
-    let id = ItemId("org.example.App".to_owned());
-    let pix = PixmapData {
-        width: 22,
-        height: 22,
-        data: vec![0xAA, 0xBB, 0xCC, 0xDD],
-    };
-    state.pixmap_cache.insert((id.clone(), 22), pix.clone());
-
-    let cached = state.pixmap_cache.get(&(id, 22));
-    assert!(cached.is_some());
-    assert_eq!(cached.unwrap().data, pix.data);
-    assert_eq!(cached.unwrap().width, 22);
-    assert_eq!(cached.unwrap().height, 22);
-}
-
-#[test]
-fn host_state_pixmap_cache_invalidation() {
-    let mut state = HostState::new();
-    let id = ItemId("org.example.App".to_owned());
-    state.pixmap_cache.insert(
-        (id.clone(), 16),
-        PixmapData {
-            width: 16,
-            height: 16,
-            data: vec![1, 2],
-        },
-    );
-    state.pixmap_cache.insert(
-        (id.clone(), 22),
-        PixmapData {
-            width: 22,
-            height: 22,
-            data: vec![3, 4],
-        },
-    );
-
-    // A different item's entry must survive.
-    let other = ItemId("org.other.App".to_owned());
-    state.pixmap_cache.insert(
-        (other.clone(), 22),
-        PixmapData {
-            width: 22,
-            height: 22,
-            data: vec![5, 6],
-        },
-    );
-
-    state.invalidate_pixmap_cache(&id);
-
-    assert!(
-        !state.pixmap_cache.contains_key(&(id.clone(), 16)),
-        "16px entry must be cleared"
-    );
-    assert!(
-        !state.pixmap_cache.contains_key(&(id.clone(), 22)),
-        "22px entry must be cleared"
-    );
-    assert!(
-        state.pixmap_cache.contains_key(&(other.clone(), 22)),
-        "other item entry must survive"
-    );
-}
-
 #[test]
 fn tray_item_attention_icon_defaults_empty() {
     let item = dummy_item("App");
@@ -277,4 +174,63 @@ fn tray_item_tool_tip_defaults_empty() {
         item.tool_tip.icon_name.is_empty(),
         "tool_tip.icon_name defaults to empty"
     );
+}
+
+#[tokio::test]
+async fn replacing_an_item_task_aborts_the_old_one() {
+    let mut state = HostState::new();
+    let id = ItemId::from("org.example.App");
+    let first = tokio::spawn(std::future::pending::<()>());
+    let first_abort = first.abort_handle();
+    state.set_item_task(id.clone(), first);
+
+    state.set_item_task(id.clone(), tokio::spawn(std::future::pending::<()>()));
+    tokio::task::yield_now().await;
+    assert!(first_abort.is_finished(), "replaced task must be aborted");
+    assert_eq!(state.item_tasks.len(), 1);
+}
+
+#[test]
+fn items_keep_registration_order() {
+    let ids = |state: &HostState| -> Vec<String> {
+        state
+            .sorted_items()
+            .iter()
+            .map(|i| i.id.to_string())
+            .collect()
+    };
+    let mut state = HostState::new();
+    for id in ["c", "a", "b"] {
+        state.insert_item(dummy_item(id));
+    }
+    assert_eq!(ids(&state), ["c", "a", "b"]);
+
+    // Updating an item keeps its place; a returning item goes last.
+    state.insert_item(dummy_item("c"));
+    state.remove_item(&ItemId::from("a"));
+    state.insert_item(dummy_item("a"));
+    assert_eq!(ids(&state), ["c", "b", "a"]);
+}
+
+#[test]
+fn pixmaps_from_dbus_keeps_only_consistent_pixmaps() {
+    let kept = pixmaps_from_dbus(vec![
+        (1, 1, vec![0; 4]),
+        (i32::MAX, i32::MAX, vec![0; 4]),
+        (-1, -1, vec![0; 4]),
+        (2, 1, vec![0; 4]),
+        (0, 5, Vec::new()),
+        (2, 3, vec![0; 24]),
+    ]);
+    let dims: Vec<_> = kept.iter().map(|p| (p.width, p.height)).collect();
+    assert_eq!(dims, [(1, 1), (2, 3)]);
+}
+
+#[test]
+fn strip_mnemonics_follows_dbusmenu_rules() {
+    assert_eq!(strip_mnemonics("_Open"), "Open");
+    assert_eq!(strip_mnemonics("Save __as"), "Save _as");
+    assert_eq!(strip_mnemonics("a_b_c"), "abc");
+    assert_eq!(strip_mnemonics("trailing_"), "trailing_");
+    assert_eq!(strip_mnemonics("plain"), "plain");
 }

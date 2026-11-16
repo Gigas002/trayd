@@ -23,7 +23,7 @@ use zbus::{ObjectPath, OwnedVariant, object_server::SignalEmitter};
 
 use crate::{
     TraydError,
-    dbus::watcher::SharedWatcherInner,
+    dbus::watcher::{SharedWatcherInner, service_belongs_to},
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
     model::{
         HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
@@ -35,6 +35,9 @@ use crate::{
 
 const SNI_WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
 const SNI_WATCHER_PATH: &str = "/StatusNotifierWatcher";
+/// Longest wait for any D-Bus reply.  A hung tray app must not stall an
+/// `activate` or `get_menu` forever.
+const METHOD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Capacity of the HostEvent broadcast channel.
 const EVENTS_CAPACITY: usize = 64;
 
@@ -42,33 +45,59 @@ const EVENTS_CAPACITY: usize = 64;
 
 struct HostState {
     items: HashMap<ItemId, TrayItem>,
-    /// Derived pixmap cache: `(app_id, requested_size_px)` → best-matched ARGB32 bytes.
-    /// Invalidated on icon change signals and item removal.
-    pixmap_cache: HashMap<(ItemId, u16), PixmapData>,
     /// Per-item signal-watcher task handles.  Aborted when the item is removed so
     /// that the proxy, its property-cache task, and all signal subscriptions are
     /// cleaned up immediately rather than leaking until the process is restarted.
     item_tasks: HashMap<ItemId, tokio::task::JoinHandle<()>>,
+    /// Registrations whose properties are still being fetched, by bus name.
+    /// Dropped when that name leaves the bus, so the fetch cannot insert an
+    /// item for an app that is already gone.
+    pending: HashMap<ItemId, String>,
+    /// Registration sequence number per item: lists come out in this order,
+    /// so icons keep their place in a bar instead of following hash order.
+    order: HashMap<ItemId, u64>,
+    next_order: u64,
 }
 
 impl HostState {
     fn new() -> Self {
         Self {
             items: HashMap::new(),
-            pixmap_cache: HashMap::new(),
             item_tasks: HashMap::new(),
+            pending: HashMap::new(),
+            order: HashMap::new(),
+            next_order: 0,
         }
     }
 
-    /// Remove all pixmap cache entries for `id`.
-    fn invalidate_pixmap_cache(&mut self, id: &ItemId) {
-        self.pixmap_cache.retain(|(item_id, _), _| item_id != id);
+    /// Track the signal-watcher task of `id`, aborting the one it replaces
+    /// (a detached task would keep its proxy and match rules forever).
+    fn set_item_task(&mut self, id: ItemId, handle: tokio::task::JoinHandle<()>) {
+        if let Some(old) = self.item_tasks.insert(id, handle) {
+            old.abort();
+        }
+    }
+
+    /// Add or replace an item; a new item goes after all existing ones.
+    fn insert_item(&mut self, item: TrayItem) {
+        if !self.order.contains_key(&item.id) {
+            self.order.insert(item.id.clone(), self.next_order);
+            self.next_order += 1;
+        }
+        self.items.insert(item.id.clone(), item);
+    }
+
+    /// All items in registration order.
+    fn sorted_items(&self) -> Vec<TrayItem> {
+        let mut items: Vec<&TrayItem> = self.items.values().collect();
+        items.sort_by_key(|item| self.order.get(&item.id).copied().unwrap_or(u64::MAX));
+        items.into_iter().cloned().collect()
     }
 
     /// Remove an item and abort its associated signal-watcher task.
     fn remove_item(&mut self, id: &ItemId) {
         self.items.remove(id);
-        self.invalidate_pixmap_cache(id);
+        self.order.remove(id);
         if let Some(handle) = self.item_tasks.remove(id) {
             handle.abort();
         }
@@ -104,18 +133,43 @@ impl TrayHost {
     ///
     /// # Errors
     ///
-    /// Returns `Err(TraydError::DBus(_))` if the session bus is unreachable or
-    /// the watcher name is already taken by another process.
+    /// Returns `Err(TraydError::DBus(_))` if the session bus is unreachable, and
+    /// `Err(TraydError::DBus(zbus::Error::NameTaken))` if another process
+    /// already owns the watcher name (another tray is running).
     pub async fn start() -> Result<Self, TraydError> {
+        Self::start_with(zbus::connection::Builder::session()).await
+    }
+
+    /// Like [`TrayHost::start`], but on the bus at `address` (a D-Bus address
+    /// such as `unix:path=/run/user/1000/bus`) instead of the session bus.
+    ///
+    /// Useful for nested sessions and for tests that run a private bus.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`TrayHost::start`], plus `Err(TraydError::DBus(_))` if
+    /// `address` is not a valid D-Bus address.
+    pub async fn start_on(address: &str) -> Result<Self, TraydError> {
+        Self::start_with(zbus::connection::Builder::address(address)).await
+    }
+
+    async fn start_with(builder: zbus::connection::Builder<'_>) -> Result<Self, TraydError> {
         // Internal channel: watcher D-Bus object → host background loop.
         let (watcher_tx, watcher_rx) = mpsc::channel::<WatcherMsg>(32);
         let (watcher, watcher_inner) = StatusNotifierWatcher::new(watcher_tx);
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
-        let conn = zbus::connection::Builder::session()
+        //
+        // Never replace a running watcher (zbus does by default), and never
+        // let one replace us: a second instance would silently take every
+        // new registration and, on exit, leave the name with no owner at all.
+        let conn = builder
             .serve_at(SNI_WATCHER_PATH, watcher)
             .name(SNI_WATCHER_NAME)
+            .replace_existing_names(false)
+            .allow_name_replacements(false)
+            .method_timeout(METHOD_TIMEOUT)
             .build()
             .await?;
         info!("claimed D-Bus name {SNI_WATCHER_NAME}; watcher at {SNI_WATCHER_PATH}");
@@ -151,16 +205,9 @@ impl TrayHost {
         self.inner.events_tx.subscribe()
     }
 
-    /// Snapshot of all currently cached items.
+    /// Snapshot of all currently cached items, in registration order.
     pub async fn items(&self) -> Vec<TrayItem> {
-        self.inner
-            .state
-            .read()
-            .await
-            .items
-            .values()
-            .cloned()
-            .collect()
+        self.inner.state.read().await.sorted_items()
     }
 
     /// Look up a single item by id.
@@ -170,10 +217,9 @@ impl TrayHost {
 
     /// Fetch raw ARGB32 pixmap bytes for an item at approximately `size` pixels.
     ///
-    /// Uses the in-process item cache; no D-Bus round-trip after the initial
-    /// registration fetch.  Results are memoised in a derived pixmap cache
-    /// keyed by `(app_id, size)` and invalidated when icon or status signals
-    /// arrive.
+    /// Picks among the pixmaps held in the item cache: no D-Bus round-trip.
+    /// Nothing is stored per requested size, so clients asking for many sizes
+    /// cannot grow the daemon's memory.
     ///
     /// When the item's status is [`TrayStatus::NeedsAttention`] and the item
     /// has attention pixmap data, that is served instead of the normal icon.
@@ -182,58 +228,39 @@ impl TrayHost {
     ///
     /// - [`TraydError::NotFound`] if the item or its pixmap data is absent.
     pub async fn get_pixmap(&self, id: &ItemId, size: u16) -> Result<PixmapData, TraydError> {
-        // Fast path: return from derived pixmap cache.
+        let state = self.inner.state.read().await;
+        let item = state
+            .items
+            .get(id)
+            .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
+
+        // Prefer attention icon when the item signals urgency and has pixmaps.
+        let icon = if item.status == TrayStatus::NeedsAttention
+            && !item.attention_icon.pixmaps.is_empty()
         {
-            let state = self.inner.state.read().await;
-            if let Some(cached) = state.pixmap_cache.get(&(id.clone(), size)) {
-                return Ok(cached.clone());
-            }
-        }
-
-        // Slow path: pick the best pixmap from the in-process item cache.
-        let result = {
-            let state = self.inner.state.read().await;
-            let item = state
-                .items
-                .get(id)
-                .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
-
-            // Prefer attention icon when the item signals urgency and has pixmaps.
-            let icon = if item.status == TrayStatus::NeedsAttention
-                && !item.attention_icon.pixmaps.is_empty()
-            {
-                &item.attention_icon
-            } else {
-                &item.icon
-            };
-
-            if icon.pixmaps.is_empty() {
-                return Err(TraydError::NotFound(format!("no pixmap for {id}")));
-            }
-
-            // Pick the nearest size; prefer an exact match, then larger, then smaller.
-            let best = icon
-                .pixmaps
-                .iter()
-                .min_by_key(|p| (p.width - size as i32).unsigned_abs())
-                .expect("pixmaps is non-empty");
-
-            PixmapData {
-                width: best.width as u32,
-                height: best.height as u32,
-                data: best.data.clone(),
-            }
+            &item.attention_icon
+        } else {
+            &item.icon
         };
 
-        // Memoise for subsequent calls with the same size.
-        {
-            let mut state = self.inner.state.write().await;
-            state
-                .pixmap_cache
-                .insert((id.clone(), size), result.clone());
+        if icon.pixmaps.is_empty() {
+            return Err(TraydError::NotFound(format!("no pixmap for {id}")));
         }
 
-        Ok(result)
+        // Pick the nearest width; on a tie prefer the larger pixmap, which
+        // scales down better than a small one scales up.
+        let best = icon
+            .pixmaps
+            .iter()
+            .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))
+            .expect("pixmaps is non-empty");
+
+        // `pixmaps_from_dbus` guarantees positive dimensions.
+        Ok(PixmapData {
+            width: best.width.unsigned_abs(),
+            height: best.height.unsigned_abs(),
+            data: best.data.clone(),
+        })
     }
 
     /// Activate a tray item.
@@ -333,6 +360,12 @@ impl TrayHost {
         let proxy = build_menu_proxy(&self.inner.conn, &bus_name, &menu_path).await?;
         let parent_id = submenu_id.map(|n| n as i32).unwrap_or(0);
 
+        // Apps that build menus lazily need this first; the ones that don't
+        // implement it answer with an error, which changes nothing.
+        if let Err(e) = proxy.about_to_show(parent_id).await {
+            debug!(%e, %id, parent_id, "AboutToShow failed");
+        }
+
         let (_revision, (_root_id, _root_props, children)) = proxy
             .get_layout(parent_id, 1, &[])
             .await
@@ -380,14 +413,19 @@ async fn lookup_well_known_name(conn: &zbus::Connection, unique_name: &str) -> O
     None
 }
 
-async fn build_proxy<'c>(
-    conn: &'c zbus::Connection,
-    bus_name: &'c str,
-    object_path: &'c str,
-) -> Result<StatusNotifierItemProxy<'c>, TraydError> {
+async fn build_proxy(
+    conn: &zbus::Connection,
+    bus_name: &str,
+    object_path: &str,
+) -> Result<StatusNotifierItemProxy<'static>, TraydError> {
+    // No property cache: zbus refreshes cached values only on the standard
+    // `PropertiesChanged` signal, which SNI apps don't emit.  They announce
+    // changes with `NewTitle`/`NewIcon`/… instead, and a cached proxy would
+    // keep serving the first value it ever read.
     StatusNotifierItemProxy::builder(conn)
-        .destination(bus_name)
-        .path(object_path)
+        .destination(bus_name.to_owned())
+        .path(object_path.to_owned())
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await
         .map_err(TraydError::DBus)
@@ -401,6 +439,7 @@ async fn build_menu_proxy<'c>(
     DBusMenuProxy::builder(conn)
         .destination(bus_name.to_owned())
         .path(menu_path.to_owned())
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await
         .map_err(TraydError::DBus)
@@ -421,7 +460,7 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     let (id, props, nested_children): (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>) =
         ov.try_into().ok()?;
 
-    let label = get_str_prop(&props, "label");
+    let label = strip_mnemonics(&get_str_prop(&props, "label"));
     let enabled = get_bool_prop(&props, "enabled").unwrap_or(true);
     let visible = get_bool_prop(&props, "visible").unwrap_or(true);
     let icon_name = get_str_prop(&props, "icon-name");
@@ -429,6 +468,16 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     // (the latter occurs when GetLayout was called with depth > 1).
     let is_submenu = props.contains_key("children-display") || !nested_children.is_empty();
     let children = menu_nodes_from_av(nested_children);
+    let is_separator = get_str_prop(&props, "type") == "separator";
+    let toggle_state = match get_str_prop(&props, "toggle-type").as_str() {
+        "checkmark" | "radio" => Some(
+            props
+                .get("toggle-state")
+                .and_then(|v| i32::try_from(v.clone()).ok())
+                == Some(1),
+        ),
+        _ => None,
+    };
 
     Some(MenuNode {
         id,
@@ -437,8 +486,50 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
         visible,
         icon_name,
         is_submenu,
+        is_separator,
+        toggle_state,
         children,
     })
+}
+
+/// Remove DBusMenu access-key markers: `_` before a character marks it as
+/// the mnemonic, `__` is a literal underscore.
+pub(crate) fn strip_mnemonics(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    let mut chars = label.chars();
+    while let Some(c) = chars.next() {
+        if c == '_' {
+            match chars.next() {
+                Some(next) => out.push(next),
+                None => out.push('_'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Convert pixmaps as received over D-Bus, dropping malformed ones.
+///
+/// Apps control these values: a pixmap is kept only when both sides are
+/// positive and the data holds exactly `width × height` ARGB32 pixels, so
+/// consumers can trust the dimensions they are given.
+pub(crate) fn pixmaps_from_dbus(raw: Vec<(i32, i32, Vec<u8>)>) -> Vec<IconPixmap> {
+    raw.into_iter()
+        .filter(|(w, h, data)| {
+            let expected = usize::try_from(*w)
+                .ok()
+                .zip(usize::try_from(*h).ok())
+                .and_then(|(w, h)| w.checked_mul(h)?.checked_mul(4));
+            *w > 0 && *h > 0 && expected == Some(data.len())
+        })
+        .map(|(width, height, data)| IconPixmap {
+            width,
+            height,
+            data,
+        })
+        .collect()
 }
 
 pub(crate) fn get_str_prop(props: &HashMap<String, OwnedVariant>, key: &str) -> String {
@@ -468,7 +559,7 @@ async fn run_dbus_loop(
             error!(%e, "failed to create FDO proxy; item removal tracking disabled");
             // Still process registrations, just without removal tracking.
             while let Some(msg) = watcher_rx.recv().await {
-                handle_item_registered(&conn, &inner, msg).await;
+                begin_registration(&conn, &inner, msg).await;
             }
             return;
         }
@@ -479,7 +570,7 @@ async fn run_dbus_loop(
         Err(e) => {
             error!(%e, "failed to subscribe to NameOwnerChanged; removal tracking disabled");
             while let Some(msg) = watcher_rx.recv().await {
-                handle_item_registered(&conn, &inner, msg).await;
+                begin_registration(&conn, &inner, msg).await;
             }
             return;
         }
@@ -490,7 +581,7 @@ async fn run_dbus_loop(
         tokio::select! {
             msg = watcher_rx.recv() => {
                 match msg {
-                    Some(watcher_msg) => handle_item_registered(&conn, &inner, watcher_msg).await,
+                    Some(watcher_msg) => begin_registration(&conn, &inner, watcher_msg).await,
                     None => {
                         info!("watcher channel closed, stopping host loop");
                         break;
@@ -506,11 +597,29 @@ async fn run_dbus_loop(
 
 // ─── Registration handler ─────────────────────────────────────────────────────
 
+/// Record the registration as pending and fetch the app's properties in a
+/// task of its own: a slow or hung app delays only its own item.
+async fn begin_registration(conn: &zbus::Connection, inner: &Arc<TrayHostInner>, msg: WatcherMsg) {
+    let WatcherMsg::ItemRegistered {
+        service_id,
+        bus_name,
+        ..
+    } = &msg;
+    inner
+        .state
+        .write()
+        .await
+        .pending
+        .insert(ItemId(service_id.clone()), bus_name.clone());
+    tokio::spawn(handle_item_registered(conn.clone(), Arc::clone(inner), msg));
+}
+
 async fn handle_item_registered(
-    conn: &zbus::Connection,
-    inner: &Arc<TrayHostInner>,
+    conn: zbus::Connection,
+    inner: Arc<TrayHostInner>,
     msg: WatcherMsg,
 ) {
+    let conn = &conn;
     let WatcherMsg::ItemRegistered {
         service_id,
         bus_name,
@@ -522,6 +631,12 @@ async fn handle_item_registered(
         Ok(p) => p,
         Err(e) => {
             warn!(%e, %bus_name, "failed to build StatusNotifierItem proxy");
+            inner
+                .state
+                .write()
+                .await
+                .pending
+                .remove(&ItemId(service_id));
             return;
         }
     };
@@ -539,17 +654,22 @@ async fn handle_item_registered(
 
     // Spawn a per-item signal watcher to keep the cache fresh, then store
     // the handle so it can be aborted when the item is removed.
+    let mut state = inner.state.write().await;
+    if state.pending.remove(&id).is_none() {
+        // The app left the bus while we were reading its properties.
+        debug!(%service_id, "app left during registration; not adding it");
+        return;
+    }
     let handle = tokio::spawn(run_item_signal_watcher(
         conn.clone(),
-        Arc::clone(inner),
+        Arc::clone(&inner),
         id.clone(),
         bus_name.to_owned(),
         object_path.to_owned(),
+        well_known,
     ));
-
-    let mut state = inner.state.write().await;
-    state.item_tasks.insert(id.clone(), handle);
-    state.items.insert(id, item.clone());
+    state.set_item_task(id.clone(), handle);
+    state.insert_item(item.clone());
     let _ = inner.events_tx.send(HostEvent::ItemAdded(item));
     debug!(%service_id, "item added to cache");
 }
@@ -575,6 +695,9 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
     debug!(%gone, "bus name disappeared, checking for registered items");
 
     let mut state = inner.state.write().await;
+    let pending_before = state.pending.len();
+    state.pending.retain(|_, bus_name| *bus_name != gone);
+    let cancelled_pending = state.pending.len() != pending_before;
     let ids_to_remove: Vec<ItemId> = state
         .items
         .values()
@@ -582,7 +705,7 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
         .map(|item| item.id.clone())
         .collect();
 
-    if ids_to_remove.is_empty() {
+    if ids_to_remove.is_empty() && !cancelled_pending {
         return;
     }
 
@@ -595,8 +718,9 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
     let removed_services: Vec<String> = {
         let mut watcher = inner.watcher_inner.lock().await;
         let drained = std::mem::take(&mut watcher.items);
-        let (removed, kept): (Vec<String>, Vec<String>) =
-            drained.into_iter().partition(|svc| svc.starts_with(&gone));
+        let (removed, kept): (Vec<String>, Vec<String>) = drained
+            .into_iter()
+            .partition(|svc| service_belongs_to(svc, &gone));
         watcher.items = kept;
         removed
     };
@@ -658,6 +782,63 @@ pub(crate) fn resolve_icon_name(
     }
 }
 
+/// Where registration reads an app's properties from: one `GetAll` round
+/// trip instead of thirteen `Get`s.
+enum Props {
+    /// The `GetAll` reply.
+    All(HashMap<String, OwnedVariant>),
+    /// The app answered `GetAll` with an error: read properties one by one.
+    Single,
+    /// The app did not answer at all (timeout, gone): don't wait on it once
+    /// per property.
+    Unreachable(zbus::Error),
+}
+
+impl Props {
+    async fn load(proxy: &StatusNotifierItemProxy<'_>) -> Self {
+        let inner = proxy.inner();
+        let reply = inner
+            .connection()
+            .call_method(
+                Some(inner.destination()),
+                inner.path(),
+                Some("org.freedesktop.DBus.Properties"),
+                "GetAll",
+                &(inner.interface(),),
+            )
+            .await;
+        match reply.and_then(|m| m.body().deserialize::<HashMap<String, OwnedVariant>>()) {
+            Ok(all) => Self::All(all),
+            Err(e @ zbus::Error::MethodError(..)) => {
+                debug!(%e, "GetAll refused; reading properties one by one");
+                Self::Single
+            }
+            Err(e) => Self::Unreachable(e),
+        }
+    }
+
+    /// Property `name`, from the `GetAll` reply or through `single`.
+    async fn read<T>(
+        &self,
+        name: &str,
+        single: impl std::future::Future<Output = zbus::Result<T>>,
+    ) -> zbus::Result<T>
+    where
+        T: TryFrom<OwnedVariant>,
+    {
+        match self {
+            Self::All(all) => {
+                let value = all
+                    .get(name)
+                    .ok_or_else(|| zbus::Error::Failure(format!("no property {name}")))?;
+                T::try_from(value.try_clone()?).map_err(|_| zbus::Error::IncorrectType)
+            }
+            Self::Single => single.await,
+            Self::Unreachable(e) => Err(e.clone()),
+        }
+    }
+}
+
 async fn fetch_item_properties(
     proxy: &StatusNotifierItemProxy<'_>,
     service_id: &str,
@@ -665,60 +846,90 @@ async fn fetch_item_properties(
     object_path: &str,
     well_known_name: Option<&str>,
 ) -> TrayItem {
-    let title = proxy.title().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch title");
-        String::new()
-    });
-    let status = TrayStatus::from_dbus(&proxy.status().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch status");
-        String::new()
-    }));
-    let icon_name = proxy.icon_name().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch icon_name");
-        String::new()
-    });
+    let props = Props::load(proxy).await;
+    let title = props
+        .read("Title", proxy.title())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch title");
+            String::new()
+        });
+    let status = TrayStatus::from_dbus(&props.read("Status", proxy.status()).await.unwrap_or_else(
+        |e| {
+            warn!(%e, %service_id, "failed to fetch status");
+            String::new()
+        },
+    ));
+    let icon_name = props
+        .read("IconName", proxy.icon_name())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch icon_name");
+            String::new()
+        });
     // Priority: explicit `IconName` → well-known bus name (e.g. `org.telegram.desktop`)
     // → SNI `Id` as a last resort (e.g. `TelegramDesktop`).
-    let sni_id = proxy.id().await.unwrap_or_else(|e| {
+    let sni_id = props.read("Id", proxy.id()).await.unwrap_or_else(|e| {
         warn!(%e, %service_id, "failed to fetch id");
         String::new()
     });
     let icon_name = resolve_icon_name(icon_name, well_known_name, sni_id);
-    let raw_pixmaps = proxy.icon_pixmap().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch icon_pixmap");
-        Vec::new()
-    });
-    let category = proxy.category().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch category");
-        String::new()
-    });
+    let raw_pixmaps = props
+        .read("IconPixmap", proxy.icon_pixmap())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch icon_pixmap");
+            Vec::new()
+        });
+    let category = props
+        .read("Category", proxy.category())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch category");
+            String::new()
+        });
     // Defer resolving item_is_menu until after menu_path is known — if the
     // property is absent (e.g. Ayatana/AppIndicator items like nm-applet) we
     // fall back to "true" whenever a valid menu path exists, which prevents a
     // crash from calling Activate on an item that only exposes a menu.
-    let item_is_menu_result = proxy.item_is_menu().await;
-    let raw_tool_tip = proxy.tool_tip().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch tool_tip");
-        Default::default()
-    });
-    let overlay_icon_name = proxy.overlay_icon_name().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch overlay_icon_name");
-        String::new()
-    });
-    let raw_overlay_pixmaps = proxy.overlay_icon_pixmap().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch overlay_icon_pixmap");
-        Vec::new()
-    });
-    let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch attention_icon_name");
-        String::new()
-    });
-    let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
-        Vec::new()
-    });
-    let menu_path = proxy
-        .menu_path()
+    let item_is_menu_result = props.read("ItemIsMenu", proxy.item_is_menu()).await;
+    let raw_tool_tip = props
+        .read("ToolTip", proxy.tool_tip())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch tool_tip");
+            Default::default()
+        });
+    let overlay_icon_name = props
+        .read("OverlayIconName", proxy.overlay_icon_name())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch overlay_icon_name");
+            String::new()
+        });
+    let raw_overlay_pixmaps = props
+        .read("OverlayIconPixmap", proxy.overlay_icon_pixmap())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch overlay_icon_pixmap");
+            Vec::new()
+        });
+    let attention_icon_name = props
+        .read("AttentionIconName", proxy.attention_icon_name())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch attention_icon_name");
+            String::new()
+        });
+    let raw_attention_pixmaps = props
+        .read("AttentionIconPixmap", proxy.attention_icon_pixmap())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
+            Vec::new()
+        });
+    let menu_path = props
+        .read("Menu", proxy.menu_path())
         .await
         .map(|p| p.to_string())
         .unwrap_or_else(|e| {
@@ -737,39 +948,17 @@ async fn fetch_item_properties(
 
     let tool_tip = ToolTip {
         icon_name: raw_tool_tip.0,
-        icon_pixmaps: raw_tool_tip
-            .1
-            .into_iter()
-            .map(|(w, h, data)| IconPixmap {
-                width: w,
-                height: h,
-                data,
-            })
-            .collect(),
+        icon_pixmaps: pixmaps_from_dbus(raw_tool_tip.1),
         title: raw_tool_tip.2,
         description: raw_tool_tip.3,
     };
 
     let overlay_icon = IconData {
         name: overlay_icon_name,
-        pixmaps: raw_overlay_pixmaps
-            .into_iter()
-            .map(|(w, h, data)| IconPixmap {
-                width: w,
-                height: h,
-                data,
-            })
-            .collect(),
+        pixmaps: pixmaps_from_dbus(raw_overlay_pixmaps),
     };
 
-    let pixmaps = raw_pixmaps
-        .into_iter()
-        .map(|(w, h, data)| IconPixmap {
-            width: w,
-            height: h,
-            data,
-        })
-        .collect();
+    let pixmaps = pixmaps_from_dbus(raw_pixmaps);
 
     TrayItem {
         id: ItemId(service_id.to_owned()),
@@ -787,14 +976,7 @@ async fn fetch_item_properties(
         },
         attention_icon: IconData {
             name: attention_icon_name,
-            pixmaps: raw_attention_pixmaps
-                .into_iter()
-                .map(|(w, h, data)| IconPixmap {
-                    width: w,
-                    height: h,
-                    data,
-                })
-                .collect(),
+            pixmaps: pixmaps_from_dbus(raw_attention_pixmaps),
         },
         menu_path,
     }
@@ -802,17 +984,45 @@ async fn fetch_item_properties(
 
 // ─── Per-item signal watcher ──────────────────────────────────────────────────────────────────────────────────
 
+/// What a burst of change signals asks the refresher to re-read.
+#[derive(Debug, Default)]
+struct Dirty {
+    icon: bool,
+    attention: bool,
+    title: bool,
+    overlay: bool,
+    menu: bool,
+    tool_tip: bool,
+}
+
+/// Aborts the wrapped task when dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Long-running per-item task: subscribes to SNI property-change signals and
-/// keeps the in-process item cache — and derived pixmap cache — fresh.
+/// keeps the in-process item cache fresh.
+///
+/// The signal loop itself never waits on D-Bus: it only records what changed
+/// and wakes a refresher task.  zbus applies backpressure to signal streams,
+/// so a loop that stopped reading while it waited for a property reply would
+/// block the connection's reader, and with it that very reply — a burst of
+/// more than 64 signals froze the whole connection.  Recording also coalesces
+/// bursts into one re-read.
 ///
 /// The task exits naturally when all signal streams close (i.e. the app's bus
-/// name disappears).
+/// name disappears); the refresher is aborted with it.
 async fn run_item_signal_watcher(
     conn: zbus::Connection,
     inner: Arc<TrayHostInner>,
     id: ItemId,
     bus_name: String,
     object_path: String,
+    well_known: Option<String>,
 ) {
     let proxy = match build_proxy(&conn, &bus_name, &object_path).await {
         Ok(p) => p,
@@ -883,45 +1093,81 @@ async fn run_item_signal_watcher(
     );
     debug!(%id, "item signal watcher started");
 
+    let dirty = Arc::new(std::sync::Mutex::new(Dirty::default()));
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let _refresher = AbortOnDrop(tokio::spawn(run_item_refresher(
+        Arc::clone(&inner),
+        id.clone(),
+        proxy.clone(),
+        well_known,
+        Arc::clone(&dirty),
+        Arc::clone(&wake),
+    )));
+    let mark = |set: fn(&mut Dirty)| {
+        set(&mut dirty.lock().unwrap_or_else(|e| e.into_inner()));
+        wake.notify_one();
+    };
+
     loop {
         tokio::select! {
-            Some(_) = new_icon.next() => {
-                on_icon_changed(&inner, &id, &proxy, false, &bus_name).await;
-            }
-            Some(_) = new_title.next() => {
-                on_title_changed(&inner, &id, &proxy).await;
-            }
+            Some(_) = new_icon.next() => mark(|d| d.icon = true),
+            Some(_) = new_title.next() => mark(|d| d.title = true),
             Some(sig) = new_status.next() => {
+                // The new status travels in the signal: no D-Bus read needed.
                 if let Ok(args) = sig.args() {
                     on_status_changed(&inner, &id, TrayStatus::from_dbus(args.status())).await;
                 }
             }
-            Some(_) = new_attention.next() => {
-                on_icon_changed(&inner, &id, &proxy, true, &bus_name).await;
-            }
-            Some(_) = new_overlay.next() => {
-                on_overlay_icon_changed(&inner, &id, &proxy).await;
-            }
-            Some(_) = new_menu.next() => {
-                on_menu_path_changed(&inner, &id, &proxy).await;
-            }
-            Some(_) = new_tool_tip.next() => {
-                on_tool_tip_changed(&inner, &id, &proxy).await;
-            }
+            Some(_) = new_attention.next() => mark(|d| d.attention = true),
+            Some(_) = new_overlay.next() => mark(|d| d.overlay = true),
+            Some(_) = new_menu.next() => mark(|d| d.menu = true),
+            Some(_) = new_tool_tip.next() => mark(|d| d.tool_tip = true),
             else => break,
         }
     }
     debug!(%id, "item signal watcher ended");
 }
 
-/// Re-fetch the normal or attention icon from D-Bus, update the item cache,
-/// and invalidate the derived pixmap cache.
+/// Re-reads whatever the signal loop marked dirty, one round at a time.
+async fn run_item_refresher(
+    inner: Arc<TrayHostInner>,
+    id: ItemId,
+    proxy: StatusNotifierItemProxy<'static>,
+    well_known: Option<String>,
+    dirty: Arc<std::sync::Mutex<Dirty>>,
+    wake: Arc<tokio::sync::Notify>,
+) {
+    loop {
+        wake.notified().await;
+        let d = std::mem::take(&mut *dirty.lock().unwrap_or_else(|e| e.into_inner()));
+        if d.icon {
+            on_icon_changed(&inner, &id, &proxy, false, well_known.as_deref()).await;
+        }
+        if d.attention {
+            on_icon_changed(&inner, &id, &proxy, true, well_known.as_deref()).await;
+        }
+        if d.title {
+            on_title_changed(&inner, &id, &proxy).await;
+        }
+        if d.overlay {
+            on_overlay_icon_changed(&inner, &id, &proxy).await;
+        }
+        if d.menu {
+            on_menu_path_changed(&inner, &id, &proxy).await;
+        }
+        if d.tool_tip {
+            on_tool_tip_changed(&inner, &id, &proxy).await;
+        }
+    }
+}
+
+/// Re-fetch the normal or attention icon from D-Bus and update the item cache.
 async fn on_icon_changed(
     inner: &Arc<TrayHostInner>,
     id: &ItemId,
     proxy: &StatusNotifierItemProxy<'_>,
     attention: bool,
-    bus_name: &str,
+    well_known: Option<&str>,
 ) {
     let (icon_name, raw) = if attention {
         let name = proxy.attention_icon_name().await.unwrap_or_else(|e| {
@@ -944,13 +1190,10 @@ async fn on_icon_changed(
             warn!(%e, %id, "failed to fetch id");
             String::new()
         });
-        let resolved = resolve_icon_name(
-            name,
-            lookup_well_known_name(&inner.conn, bus_name)
-                .await
-                .as_deref(),
-            sni_id,
-        );
+        // The well-known name was looked up once at registration; repeating
+        // the lookup (one call per name on the bus) for every animation
+        // frame of an icon cost ~24 round trips per NewIcon.
+        let resolved = resolve_icon_name(name, well_known, sni_id);
         let pixmaps = proxy.icon_pixmap().await.unwrap_or_else(|e| {
             warn!(%e, %id, "failed to fetch icon_pixmap");
             Vec::new()
@@ -959,14 +1202,7 @@ async fn on_icon_changed(
     };
     let new_icon = IconData {
         name: icon_name,
-        pixmaps: raw
-            .into_iter()
-            .map(|(w, h, d)| IconPixmap {
-                width: w,
-                height: h,
-                data: d,
-            })
-            .collect(),
+        pixmaps: pixmaps_from_dbus(raw),
     };
 
     let event = {
@@ -979,16 +1215,11 @@ async fn on_icon_changed(
             }
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            state.invalidate_pixmap_cache(id);
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
-        debug!(%id, attention, "icon updated and pixmap cache cleared");
+        debug!(%id, attention, "icon updated");
     }
 }
 
@@ -1017,8 +1248,8 @@ async fn on_title_changed(
     }
 }
 
-/// Update the item status and invalidate the pixmap cache (`NeedsAttention`
-/// changes which icon `get_pixmap` serves).
+/// Update the item status (`NeedsAttention` changes which icon `get_pixmap`
+/// serves).
 async fn on_status_changed(inner: &Arc<TrayHostInner>, id: &ItemId, new_status: TrayStatus) {
     let event = {
         let mut state = inner.state.write().await;
@@ -1026,16 +1257,11 @@ async fn on_status_changed(inner: &Arc<TrayHostInner>, id: &ItemId, new_status: 
             item.status = new_status;
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            state.invalidate_pixmap_cache(id);
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
-        debug!(%id, "status updated and pixmap cache cleared");
+        debug!(%id, "status updated");
     }
 }
 
@@ -1051,15 +1277,7 @@ async fn on_tool_tip_changed(
     });
     let new_tip = ToolTip {
         icon_name: raw.0,
-        icon_pixmaps: raw
-            .1
-            .into_iter()
-            .map(|(w, h, data)| IconPixmap {
-                width: w,
-                height: h,
-                data,
-            })
-            .collect(),
+        icon_pixmaps: pixmaps_from_dbus(raw.1),
         title: raw.2,
         description: raw.3,
     };
@@ -1093,14 +1311,7 @@ async fn on_overlay_icon_changed(
     });
     let new_overlay = IconData {
         name: icon_name,
-        pixmaps: raw
-            .into_iter()
-            .map(|(w, h, d)| IconPixmap {
-                width: w,
-                height: h,
-                data: d,
-            })
-            .collect(),
+        pixmaps: pixmaps_from_dbus(raw),
     };
 
     let event = {

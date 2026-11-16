@@ -43,8 +43,13 @@ trayd
 trayd run
 ```
 
-By default the daemon listens on `$XDG_RUNTIME_DIR/trayd.sock`.
-To use a custom socket or log level, copy `examples/trayd.toml` to `$XDG_CONFIG_HOME/trayd/trayd.toml` and edit it.
+By default the daemon listens on `$XDG_RUNTIME_DIR/trayd.sock` (mode `0600`).
+To use a custom socket or log level, copy `examples/trayd.toml` to `$XDG_CONFIG_HOME/trayd/trayd.toml` and edit it, or pass `--socket`.
+Without `XDG_RUNTIME_DIR` and without a configured path, trayd refuses to start rather than fall back to a shared directory.
+It never replaces a file that is not a socket, and removes its socket on `SIGINT`/`SIGTERM`.
+
+Only one tray can own `org.kde.StatusNotifierWatcher` per session: trayd exits with an error if another tray (another trayd, or a desktop's own tray) already does.
+Logs go to stderr (`RUST_LOG` overrides `log_filter`).
 
 Health-check while the daemon is running:
 
@@ -110,6 +115,9 @@ trayctl menu --app-id org.freedesktop.NetworkManager.applet \
 trayctl menu --app-id org.freedesktop.NetworkManager.applet \
              --dmenu-cmd "fuzzel --dmenu"
 ```
+
+The command runs through `sh -c`, so quoted arguments work (`--dmenu-cmd "rofi -dmenu -p 'Tray menu'"`); the menu text is only ever passed on stdin.
+Separators and greyed-out rows are not offered, submenus end in `›`, check and radio rows start with `[x]` / `[ ]`, and repeated labels are numbered (`Settings (2)`) so the row you pick is the one activated.
 
 The submenu loop works like this:
 

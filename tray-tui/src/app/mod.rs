@@ -3,13 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -26,8 +21,37 @@ use crate::ipc::{IpcClient, MenuItem, MinimalTrayItem, TrayEvent};
 pub struct MenuLevel {
     #[allow(dead_code)]
     pub submenu_id: Option<u32>,
+    /// Label of the submenu row that opened this level (`None` at the top).
+    pub label: Option<String>,
     pub items: Vec<MenuItem>,
     pub cursor: usize,
+}
+
+impl MenuLevel {
+    fn new(submenu_id: Option<u32>, label: Option<String>, items: Vec<MenuItem>) -> Self {
+        let cursor = items.iter().position(|i| !i.separator).unwrap_or(0);
+        Self {
+            submenu_id,
+            label,
+            items,
+            cursor,
+        }
+    }
+
+    /// Move to the next non-separator row in direction `step` (±1), if any.
+    fn step(&mut self, step: isize) {
+        let mut at = self.cursor;
+        loop {
+            match at.checked_add_signed(step) {
+                Some(next) if next < self.items.len() => at = next,
+                _ => return,
+            }
+            if !self.items[at].separator {
+                self.cursor = at;
+                return;
+            }
+        }
+    }
 }
 
 pub enum View {
@@ -38,12 +62,30 @@ pub enum View {
     },
 }
 
+/// What the subscription task reports to the UI.
+#[derive(Debug)]
+pub enum Update {
+    /// A fresh snapshot of the tray.
+    Items(Vec<MinimalTrayItem>),
+    /// The daemon went away; the task keeps retrying.
+    Disconnected(String),
+}
+
 #[derive(Debug)]
 enum Action {
     OpenMenu(String),
-    OpenSubmenu { app_id: String, item_id: u32 },
+    OpenSubmenu {
+        app_id: String,
+        item_id: u32,
+        label: String,
+    },
     PrimaryActivate(String),
-    Activate { app_id: String, item_id: u32 },
+    Activate {
+        app_id: String,
+        item_id: u32,
+    },
+    /// A greyed-out row: say so instead of activating it.
+    Disabled(String),
     Nothing,
 }
 
@@ -57,6 +99,8 @@ pub struct App {
     items_cursor: usize,
     view: View,
     status_msg: Option<String>,
+    /// Why the daemon is unreachable, while it is.
+    disconnected: Option<String>,
 }
 
 impl App {
@@ -67,6 +111,7 @@ impl App {
             items_cursor: 0,
             view: View::Items,
             status_msg: None,
+            disconnected: None,
         }
     }
 
@@ -76,32 +121,29 @@ impl App {
         let initial_items = cmd.get_items().await?;
         drop(cmd);
 
-        let (update_tx, update_rx) = mpsc::channel::<Vec<MinimalTrayItem>>(32);
+        let (update_tx, update_rx) = mpsc::channel::<Update>(32);
         tokio::spawn(subscribe_task(socket_path.clone(), update_tx));
 
         let (input_tx, input_rx) = mpsc::channel::<Event>(32);
         tokio::task::spawn_blocking(move || input_task(input_tx));
 
-        enable_raw_mode()?;
-        let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+        // Log lines written to the terminal would draw over the UI.
+        crate::logger::pause();
+        // Also installs a panic hook that restores the terminal.
+        let mut terminal = ratatui::init();
 
         let mut app = App::new(socket_path, initial_items);
         let result = app.event_loop(&mut terminal, update_rx, input_rx).await;
 
-        let _ = disable_raw_mode();
-        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-        let _ = terminal.show_cursor();
-
+        ratatui::restore();
+        crate::logger::resume();
         result
     }
 
     async fn event_loop(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-        mut update_rx: mpsc::Receiver<Vec<MinimalTrayItem>>,
+        terminal: &mut DefaultTerminal,
+        mut update_rx: mpsc::Receiver<Update>,
         mut input_rx: mpsc::Receiver<Event>,
     ) -> Result<(), TuiError> {
         loop {
@@ -120,19 +162,45 @@ impl App {
                 }
                 update = update_rx.recv() => {
                     match update {
-                        Some(items) => {
-                            self.tray_items = items;
-                            if self.items_cursor >= self.tray_items.len() {
-                                self.items_cursor =
-                                    self.tray_items.len().saturating_sub(1);
-                            }
-                        }
+                        Some(update) => self.apply_update(update),
                         None => break,
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Take in news from the daemon.  The cursor stays on the same tray item
+    /// even when items come or go before it, and an open menu closes when its
+    /// item leaves the tray.
+    fn apply_update(&mut self, update: Update) {
+        let items = match update {
+            Update::Disconnected(reason) => {
+                self.disconnected = Some(reason);
+                return;
+            }
+            Update::Items(items) => items,
+        };
+        self.disconnected = None;
+        let selected = self
+            .tray_items
+            .get(self.items_cursor)
+            .map(|i| i.app_id.clone());
+        self.tray_items = items;
+        self.items_cursor = selected
+            .and_then(|id| self.tray_items.iter().position(|i| i.app_id == id))
+            .unwrap_or_else(|| {
+                self.items_cursor
+                    .min(self.tray_items.len().saturating_sub(1))
+            });
+
+        if let View::Menu { app_id, .. } = &self.view
+            && !self.tray_items.iter().any(|i| &i.app_id == app_id)
+        {
+            self.status_msg = Some(format!("{app_id} left the tray"));
+            self.view = View::Items;
+        }
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<bool, TuiError> {
@@ -186,10 +254,15 @@ impl App {
                     Some(i) => i,
                     None => return Action::Nothing,
                 };
-                if item.is_submenu {
+                if item.separator {
+                    Action::Nothing
+                } else if !item.enabled {
+                    Action::Disabled(item.label.clone())
+                } else if item.is_submenu {
                     Action::OpenSubmenu {
                         app_id: app_id.clone(),
                         item_id: item.item_id,
+                        label: item.label.clone(),
                     }
                 } else {
                     Action::Activate {
@@ -209,6 +282,9 @@ impl App {
     async fn execute_action(&mut self, action: Action) -> Result<(), TuiError> {
         match action {
             Action::Nothing => {}
+            Action::Disabled(label) => {
+                self.status_msg = Some(format!("\"{label}\" is disabled"));
+            }
             Action::PrimaryActivate(app_id) => {
                 let mut client = IpcClient::connect(&self.socket_path).await?;
                 client.activate(&app_id, 0).await?;
@@ -218,22 +294,18 @@ impl App {
                 let items = client.get_menu(&app_id, None).await?;
                 self.view = View::Menu {
                     app_id,
-                    stack: vec![MenuLevel {
-                        submenu_id: None,
-                        items,
-                        cursor: 0,
-                    }],
+                    stack: vec![MenuLevel::new(None, None, items)],
                 };
             }
-            Action::OpenSubmenu { app_id, item_id } => {
+            Action::OpenSubmenu {
+                app_id,
+                item_id,
+                label,
+            } => {
                 let mut client = IpcClient::connect(&self.socket_path).await?;
                 let items = client.get_menu(&app_id, Some(item_id)).await?;
                 if let View::Menu { stack, .. } = &mut self.view {
-                    stack.push(MenuLevel {
-                        submenu_id: Some(item_id),
-                        items,
-                        cursor: 0,
-                    });
+                    stack.push(MenuLevel::new(Some(item_id), Some(label), items));
                 }
             }
             Action::Activate { app_id, item_id } => {
@@ -252,7 +324,7 @@ impl App {
             }
             View::Menu { stack, .. } => {
                 if let Some(level) = stack.last_mut() {
-                    level.cursor = level.cursor.saturating_sub(1);
+                    level.step(-1);
                 }
             }
         }
@@ -266,10 +338,8 @@ impl App {
                 }
             }
             View::Menu { stack, .. } => {
-                if let Some(level) = stack.last_mut()
-                    && level.cursor + 1 < level.items.len()
-                {
-                    level.cursor += 1;
+                if let Some(level) = stack.last_mut() {
+                    level.step(1);
                 }
             }
         }
@@ -353,23 +423,41 @@ impl App {
             None => return,
         };
 
-        let title = if stack.len() == 1 {
-            format!(" {app_id} ")
-        } else {
-            format!(" {app_id} > (submenu) ")
-        };
+        // "Title › Submenu › Inner", named like the items list names the item.
+        let name = self
+            .tray_items
+            .iter()
+            .find(|i| &i.app_id == app_id)
+            .and_then(|i| i.title.as_deref())
+            .unwrap_or(app_id);
+        let mut title = format!(" {name}");
+        for label in stack.iter().filter_map(|l| l.label.as_deref()) {
+            title.push_str(" › ");
+            title.push_str(label);
+        }
+        title.push(' ');
 
+        let width = usize::from(area.width.saturating_sub(4));
         let list_items: Vec<ListItem> = level
             .items
             .iter()
             .map(|item| {
-                let label = if item.label.is_empty() {
-                    "—"
-                } else {
-                    item.label.as_str()
+                if item.separator {
+                    return ListItem::new("─".repeat(width))
+                        .style(Style::default().fg(Color::DarkGray));
+                }
+                let check = match item.checked {
+                    Some(true) => "[x] ",
+                    Some(false) => "[ ] ",
+                    None => "",
                 };
                 let suffix = if item.is_submenu { " ▶" } else { "" };
-                ListItem::new(format!("{label}{suffix}"))
+                let row = ListItem::new(format!("{check}{}{suffix}", item.label));
+                if item.enabled {
+                    row
+                } else {
+                    row.style(Style::default().fg(Color::DarkGray))
+                }
             })
             .collect();
 
@@ -394,6 +482,11 @@ impl App {
     fn render_status(&self, f: &mut ratatui::Frame, area: Rect) {
         let (text, style) = if let Some(msg) = &self.status_msg {
             (format!(" {msg}"), Style::default().fg(Color::Red))
+        } else if let Some(reason) = &self.disconnected {
+            (
+                format!(" trayd unreachable, retrying… ({reason})"),
+                Style::default().fg(Color::Yellow),
+            )
         } else {
             let hint = match &self.view {
                 View::Items => " j/k: navigate  Enter: activate/menu  m: open menu  q: quit",
@@ -410,12 +503,15 @@ impl App {
 // Background tasks
 // ---------------------------------------------------------------------------
 
-async fn subscribe_task(socket_path: PathBuf, tx: mpsc::Sender<Vec<MinimalTrayItem>>) {
+async fn subscribe_task(socket_path: PathBuf, tx: mpsc::Sender<Update>) {
     loop {
         match run_subscribe(&socket_path, &tx).await {
             Ok(()) => break,
             Err(e) => {
-                tracing::warn!(%e, "subscribe disconnected, retrying in 1s");
+                tracing::debug!(%e, "subscribe disconnected, retrying in 1s");
+                if tx.send(Update::Disconnected(e.to_string())).await.is_err() {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 if tx.is_closed() {
                     break;
@@ -425,16 +521,13 @@ async fn subscribe_task(socket_path: PathBuf, tx: mpsc::Sender<Vec<MinimalTrayIt
     }
 }
 
-async fn run_subscribe(
-    socket_path: &Path,
-    tx: &mpsc::Sender<Vec<MinimalTrayItem>>,
-) -> Result<(), TuiError> {
+async fn run_subscribe(socket_path: &Path, tx: &mpsc::Sender<Update>) -> Result<(), TuiError> {
     let mut client = IpcClient::connect(socket_path).await?;
     client.send_subscribe().await?;
     loop {
         match client.recv_event().await? {
             TrayEvent::Update(items) => {
-                if tx.send(items).await.is_err() {
+                if tx.send(Update::Items(items)).await.is_err() {
                     return Ok(());
                 }
             }

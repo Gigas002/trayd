@@ -19,3 +19,11 @@ pub enum TraydError {
     #[error("not implemented yet")]
     NotImplemented,
 }
+
+impl TraydError {
+    /// `true` when [`TrayHost::start`](crate::TrayHost::start) failed because
+    /// another process already owns `org.kde.StatusNotifierWatcher`.
+    pub fn is_watcher_taken(&self) -> bool {
+        matches!(self, Self::DBus(zbus::Error::NameTaken))
+    }
+}

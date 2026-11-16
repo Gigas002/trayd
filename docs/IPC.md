@@ -54,12 +54,13 @@ Every request is a JSON object on one line:
 {"v":1,"error":{"code":"<CODE>","message":"..."}}
 ```
 
-| `code`            | Meaning                    |
-| ----------------- | -------------------------- |
-| `NOT_FOUND`       | `app_id` not registered    |
-| `BUS_FAILED`      | D-Bus communication failed |
-| `INVALID_APP_ID`  | Malformed `app_id`         |
-| `NOT_IMPLEMENTED` | Feature not yet available  |
+| `code`            | Meaning                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_REQUEST` | Line is not a valid request: bad JSON, unknown `cmd`, missing field, `v` other than `1`, or longer than 64 KiB. The connection stays open, except after an over-long line. |
+| `NOT_FOUND`       | `app_id` not registered                                                                                                                                                    |
+| `BUS_FAILED`      | D-Bus communication failed                                                                                                                                                 |
+| `INVALID_APP_ID`  | Malformed `app_id`                                                                                                                                                         |
+| `NOT_IMPLEMENTED` | Feature not yet available                                                                                                                                                  |
 
 ---
 
@@ -104,6 +105,12 @@ Every request is a JSON object on one line:
 | `item_id`    | integer | stable row id within this menu                                             |
 | `label`      | string  | display text                                                               |
 | `is_submenu` | bool    | `true` → has children; send `get_menu` with this `item_id` as `submenu_id` |
+| `enabled`    | bool    | omitted when `true`; `false` → show greyed out and don't `activate` it     |
+| `separator`  | bool    | omitted when `false`; `true` → draw a divider (empty `label`)              |
+| `checked`    | bool    | only on check/radio rows: whether the row is on                            |
+
+Labels arrive without DBusMenu mnemonic markers (`_Open` is sent as `Open`).
+Hidden rows are never sent.
 
 ### `TrayEvent`
 

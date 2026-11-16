@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -9,7 +10,7 @@ use libtrayd::{ItemId, PixmapData, TrayHost, TraydError};
 use crate::error::TraydBinError;
 use crate::ipc::codec;
 use crate::ipc::protocol::{
-    Cmd, ErrorCode, IpcResponse, MenuItem, MinimalTrayItem, OkPayload, TrayEvent,
+    Cmd, ErrorCode, IpcResponse, MenuItem, MinimalTrayItem, OkPayload, TrayEvent, V,
 };
 
 pub struct IpcServer {
@@ -26,14 +27,31 @@ impl IpcServer {
     }
 
     pub async fn run(&self) -> Result<(), TraydBinError> {
-        let _ = std::fs::remove_file(&self.socket_path);
+        prepare_socket_path(&self.socket_path)?;
         let listener = UnixListener::bind(&self.socket_path)?;
+        // Only this user may talk to the daemon, wherever the socket lives.
+        std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))?;
         tracing::info!(path = %self.socket_path.display(), "IPC server listening");
         loop {
             let (stream, _) = listener.accept().await?;
             let host = self.host.clone();
             tokio::spawn(handle_connection(stream, host));
         }
+    }
+}
+
+/// Make `path` free for binding: remove a stale socket left by a daemon that
+/// did not shut down cleanly, but never anything else.
+///
+/// # Errors
+///
+/// [`TraydBinError::SocketPathTaken`] when a non-socket file is in the way.
+pub fn prepare_socket_path(path: &Path) -> Result<(), TraydBinError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => Ok(std::fs::remove_file(path)?),
+        Ok(_) => Err(TraydBinError::SocketPathTaken(path.display().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -45,13 +63,41 @@ async fn handle_connection(stream: UnixStream, host: TrayHost) {
         let req = match codec::read_request(&mut reader).await {
             Ok(Some(r)) => r,
             Ok(None) => return,
-            Err(e) => {
-                tracing::warn!(%e, "IPC codec error");
-                let resp = IpcResponse::err(ErrorCode::NotImplemented, e.to_string());
+            Err(e @ TraydBinError::Json(_)) => {
+                // The line was framed correctly; the client can carry on.
+                tracing::debug!(%e, "invalid IPC request");
+                let resp = IpcResponse::err(ErrorCode::InvalidRequest, e.to_string());
+                if codec::write_response(&mut write, &resp).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            Err(e @ TraydBinError::RequestTooLong) => {
+                // The rest of the line is still unread: close the connection.
+                tracing::debug!(%e, "invalid IPC request");
+                let resp = IpcResponse::err(ErrorCode::InvalidRequest, e.to_string());
                 let _ = codec::write_response(&mut write, &resp).await;
                 return;
             }
+            Err(e) => {
+                tracing::debug!(%e, "IPC read failed");
+                return;
+            }
         };
+
+        if req.v != V {
+            let resp = IpcResponse::err(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "unsupported protocol version {}; this daemon speaks {V}",
+                    req.v
+                ),
+            );
+            if codec::write_response(&mut write, &resp).await.is_err() {
+                return;
+            }
+            continue;
+        }
 
         if !dispatch(&mut write, &host, req.cmd).await {
             return;
@@ -80,11 +126,7 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
                     let items = nodes
                         .into_iter()
                         .filter(|n| n.visible)
-                        .map(|n| MenuItem {
-                            item_id: n.id as u32,
-                            label: n.label,
-                            is_submenu: n.is_submenu,
-                        })
+                        .map(to_menu_item)
                         .collect();
                     IpcResponse::ok(OkPayload::Menu { app_id, items })
                 }
@@ -110,7 +152,9 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
 
         Cmd::GetPixmap { app_id, size } => {
             let id = ItemId::from(app_id.clone());
-            let resp = match host.get_pixmap(&id, size as u16).await {
+            // Sizes beyond u16 can't match anything better than u16::MAX does.
+            let wanted = u16::try_from(size).unwrap_or(u16::MAX);
+            let resp = match host.get_pixmap(&id, wanted).await {
                 Ok(PixmapData {
                     width,
                     height,
@@ -194,6 +238,18 @@ async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost)
         if codec::write_response(write, &resp).await.is_err() {
             return;
         }
+    }
+}
+
+pub(crate) fn to_menu_item(node: libtrayd::MenuNode) -> MenuItem {
+    MenuItem {
+        // DBusMenu ids are i32; the cast round-trips through `activate`.
+        item_id: node.id as u32,
+        label: node.label,
+        is_submenu: node.is_submenu,
+        enabled: node.enabled,
+        separator: node.is_separator,
+        checked: node.toggle_state,
     }
 }
 

@@ -68,12 +68,31 @@ impl StatusNotifierWatcher {
     async fn register_status_notifier_item(
         &self,
         #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
         service: &str,
     ) -> zbus::fdo::Result<()> {
         let sender = hdr.sender().map(|s| s.to_string()).unwrap_or_default();
 
         let (bus_name, object_path) = parse_service(&sender, service);
+
+        // Reject what can never become a working item.  An entry for a name
+        // nobody owns would stay listed forever: removal is driven by the
+        // name's owner going away, which never happens for a name with none.
+        let name = zbus::names::BusName::try_from(bus_name.as_str())
+            .map_err(|_| zbus::fdo::Error::InvalidArgs(format!("{service:?}: invalid bus name")))?;
+        zbus::ObjectPath::try_from(object_path.as_str()).map_err(|_| {
+            zbus::fdo::Error::InvalidArgs(format!("{service:?}: invalid object path"))
+        })?;
+        if !zbus::fdo::DBusProxy::new(conn)
+            .await?
+            .name_has_owner(name)
+            .await?
+        {
+            return Err(zbus::fdo::Error::InvalidArgs(format!(
+                "{service:?}: {bus_name} is not on the bus"
+            )));
+        }
 
         // Canonical id: sender+path if only a path was given, else the raw service string.
         let service_id = if service.starts_with('/') {
@@ -184,4 +203,13 @@ pub fn parse_service(sender: &str, service: &str) -> (String, String) {
         // Plain bus name; use the standard default path.
         (service.to_owned(), "/StatusNotifierItem".to_owned())
     }
+}
+
+/// `true` when the registered service id `service_id` (as stored in
+/// `RegisteredStatusNotifierItems`) belongs to the bus name `bus_name`.
+///
+/// Ids are `busname` or `busname/object/path`; a plain prefix test would
+/// also match `:1.20` for `:1.2` and `org.example.App2` for `org.example.App`.
+pub fn service_belongs_to(service_id: &str, bus_name: &str) -> bool {
+    service_id.split('/').next() == Some(bus_name)
 }

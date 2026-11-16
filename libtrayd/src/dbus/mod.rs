@@ -6,7 +6,7 @@ pub mod watcher;
 
 pub use item::StatusNotifierItemProxy;
 pub use menu::DBusMenuProxy;
-pub use watcher::{StatusNotifierWatcher, WatcherMsg, parse_service};
+pub use watcher::{StatusNotifierWatcher, WatcherMsg, parse_service, service_belongs_to};
 
 #[cfg(test)]
 mod tests;

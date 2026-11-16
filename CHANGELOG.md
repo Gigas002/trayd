@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-16
+
+Findings and fixes from the audit in [`docs/AUDIT.md`](docs/AUDIT.md).
+
+**Breaking (`libtrayd`):** `MenuNode` gains public fields (`is_separator`, `toggle_state`), so code that builds it with a struct literal must set them.
+
+### Fixed
+
+- **`libtrayd`**: title, icon, tooltip, overlay and menu changes after the first were never seen: zbus cached the properties and SNI apps don't send `PropertiesChanged`.
+- **`libtrayd`**: a burst of more than 64 change signals (e.g. 500 `NewIcon`) froze the whole D-Bus connection for good; signals are now coalesced and never block the reader.
+- **`libtrayd`**: one app that never answered property reads blocked every other registration until it exited; registrations now run concurrently and every D-Bus call has a 10 s timeout.
+- **`libtrayd`**: starting a second host (e.g. another trayd) took `org.kde.StatusNotifierWatcher` from the first and left it with no owner when it exited; it now fails with an error.
+- **`libtrayd`**: registering a name nobody owns (or an empty / malformed string) created a permanent ghost item; such registrations are rejected with `InvalidArgs`.
+- **`libtrayd`**: an app leaving the bus also unregistered apps whose name started with its name (`org.example.App` removed `org.example.App2`).
+- **`libtrayd`**: items came out in hash order and reshuffled as apps were added; they now keep registration order.
+- **`libtrayd`**: pixmaps with impossible sizes (negative, or not `width × height × 4` bytes) panicked debug builds and were served as 2147483648 × 4294967291 images; they are dropped.
+- **`libtrayd`**: `get_pixmap` kept a copy of the icon per requested size (500 MB after 2000 sizes); the cache is gone.
+- **`libtrayd`**: menu labels kept `_` mnemonic markers; submenus filled on `AboutToShow` came back empty.
+- **`trayd`**: request lines were unbounded (300 MB without a newline grew the daemon to 375 MB); they are limited to 64 KiB.
+- **`trayd`**: startup deleted any file at `socket_path`; only a stale socket is removed now. No `/tmp` fallback; socket mode is `0600`; the socket is removed on `SIGINT`/`SIGTERM`.
+- **`trayd`**: `--socket` was documented but not accepted.
+- **`trayd`/`trayctl`**: logs went to stdout (trayd) and always carried ANSI colour codes.
+- **`trayctl`**: picking the second of two rows with the same label activated the first; disabled rows and separators were offered; control characters in labels reached the menu program; quoted `--dmenu-cmd` arguments were split apart.
+- **`tray-tui`**: log lines were drawn over the UI; a disconnected daemon was not shown; the cursor jumped to another app when items were added; separators and disabled rows could be activated.
+
+### Added
+
+- **`libtrayd`**: `TrayHost::start_on(address)`, `TraydError::is_watcher_taken()`, `MenuNode::is_separator` and `MenuNode::toggle_state`.
+- **IPC**: `INVALID_REQUEST` error code (malformed request, unknown command, unsupported `v`, over-long line); menu rows may carry `enabled`, `separator` and `checked`. Existing clients keep working.
+
+### Changed
+
+- **`libtrayd`**: new items' properties are read with one `GetAll` instead of 13 `Get` calls; the well-known name of path-registered apps is looked up once instead of on every `NewIcon`.
+- **`trayctl`**: `--dmenu-cmd` runs through `sh -c`.
+- Live tests run on a private `dbus-daemon` and are no longer `#[ignore]`d.
+
 ## [0.2.0] - 2026-09-04
 
 ### Fixed

@@ -1,4 +1,4 @@
-use super::find_selected;
+use super::{find_selected, menu_lines, spawn_dmenu};
 use crate::ipc::MenuItem;
 
 fn make_item(item_id: u32, label: &str, is_submenu: bool) -> MenuItem {
@@ -6,62 +6,85 @@ fn make_item(item_id: u32, label: &str, is_submenu: bool) -> MenuItem {
         item_id,
         label: label.to_owned(),
         is_submenu,
+        enabled: true,
+        separator: false,
+        checked: None,
     }
 }
 
-/// `find_selected` returns the item whose label matches exactly.
-#[test]
-fn find_selected_by_label() {
-    let items = vec![
-        make_item(1, "Copy", false),
-        make_item(2, "More Actions", true),
-    ];
-    let found = find_selected(&items, "More Actions").expect("should find item");
-    assert_eq!(found.item_id, 2);
-    assert!(found.is_submenu);
+fn lines(items: &[MenuItem]) -> Vec<String> {
+    menu_lines(items).into_iter().map(|(l, _)| l).collect()
 }
 
-/// `find_selected` returns `None` for an unknown label.
 #[test]
-fn find_selected_missing_returns_none() {
-    let items = vec![make_item(1, "Copy", false), make_item(2, "Paste", false)];
-    assert!(find_selected(&items, "Delete").is_none());
-}
-
-/// The loop's filter discards all items when every label is empty,
-/// which causes it to exit without calling dmenu.
-#[test]
-fn run_submenu_loop_empty_labels_filtered() {
+fn separators_disabled_and_blank_rows_are_not_offered() {
+    let mut disabled = make_item(2, "Greyed", false);
+    disabled.enabled = false;
+    let mut separator = make_item(3, "", false);
+    separator.separator = true;
     let items = [
-        make_item(1, "", false),
-        make_item(2, "", true),
-        make_item(3, "", false),
+        make_item(1, "Open", false),
+        disabled,
+        separator,
+        make_item(4, "   ", false),
     ];
-    let visible: Vec<&MenuItem> = items.iter().filter(|i| !i.label.is_empty()).collect();
-    assert!(
-        visible.is_empty(),
-        "all empty-label items must be filtered out before dmenu is spawned"
+    assert_eq!(lines(&items), ["Open"]);
+}
+
+#[test]
+fn submenus_and_toggles_are_marked() {
+    let mut on = make_item(2, "Mute", false);
+    on.checked = Some(true);
+    let mut off = make_item(3, "Shuffle", false);
+    off.checked = Some(false);
+    let items = [make_item(1, "More", true), on, off];
+    assert_eq!(lines(&items), ["More ›", "[x] Mute", "[ ] Shuffle"]);
+}
+
+#[test]
+fn control_characters_never_reach_the_menu() {
+    let items = [make_item(1, "Evil\x1b[31m\nline", false)];
+    assert_eq!(lines(&items), ["Evil [31m line"]);
+}
+
+#[test]
+fn duplicate_labels_select_the_row_that_was_picked() {
+    let items = [
+        make_item(10, "Settings", false),
+        make_item(20, "Settings", false),
+    ];
+    let entries = menu_lines(&items);
+    assert_eq!(entries[1].0, "Settings (2)");
+    assert_eq!(find_selected(&entries, "Settings").unwrap().item_id, 10);
+    assert_eq!(find_selected(&entries, "Settings (2)").unwrap().item_id, 20);
+}
+
+#[test]
+fn unknown_selection_matches_nothing() {
+    let items = [make_item(1, "Copy", false)];
+    assert!(find_selected(&menu_lines(&items), "Delete").is_none());
+}
+
+#[tokio::test]
+async fn dmenu_command_runs_through_the_shell() {
+    // Quoting works, and the picked line comes back trimmed.
+    let picked = spawn_dmenu("sed -n '2p'", &["a".into(), "b c".into()])
+        .await
+        .unwrap();
+    assert_eq!(picked.as_deref(), Some("b c"));
+    // Empty output means the user cancelled.
+    assert_eq!(
+        spawn_dmenu("cat >/dev/null", &["a".into()]).await.unwrap(),
+        None
     );
 }
 
-/// When multiple items share the same label, `find_selected` returns the first.
-#[test]
-fn find_selected_first_match() {
-    let items = vec![
-        make_item(10, "Duplicate", false),
-        make_item(20, "Duplicate", false),
-    ];
-    let found = find_selected(&items, "Duplicate").expect("should find first match");
-    assert_eq!(found.item_id, 10);
-}
-
-/// Basic sanity check on `MenuItem`'s `is_submenu` field.
-#[test]
-fn menu_item_is_submenu() {
-    let leaf = make_item(1, "Leaf", false);
-    let folder = make_item(2, "Folder", true);
-    assert!(!leaf.is_submenu);
-    assert!(folder.is_submenu);
-    assert_eq!(leaf.label, "Leaf");
-    assert_eq!(folder.item_id, 2);
+#[tokio::test]
+async fn missing_dmenu_command_is_an_error() {
+    assert!(
+        spawn_dmenu("definitely-not-a-dmenu-xyz", &["a".into()])
+            .await
+            .is_err()
+    );
+    assert!(spawn_dmenu("   ", &["a".into()]).await.is_err());
 }

@@ -7,6 +7,14 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+fn yes() -> bool {
+    true
+}
+
 /// Consumer → daemon request.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IpcRequest {
@@ -118,6 +126,9 @@ pub struct IpcError {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
+    /// The line was not a valid request: bad JSON, unknown command, missing
+    /// field, unsupported `v`, or longer than the size limit.
+    InvalidRequest,
     NotFound,
     BusFailed,
     InvalidAppId,
@@ -155,8 +166,19 @@ pub struct MinimalTrayItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MenuItem {
     pub item_id: u32,
+    /// Display text, mnemonic markers removed; empty for separators.
     pub label: String,
     pub is_submenu: bool,
+    /// `false` for greyed-out rows, which must not be activated.  Omitted
+    /// when `true`.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+    /// `true` for a separator line.  Omitted when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub separator: bool,
+    /// On/off state of check and radio rows; absent for plain rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked: Option<bool>,
 }
 
 /// Events pushed to `subscribe` consumers.

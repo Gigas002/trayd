@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod cli;
 mod config;
 mod daemon;
@@ -18,7 +20,8 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let config = match Config::load(cli.config.as_deref()) {
-        Ok(c) => c,
+        // CLI > config file > defaults.
+        Ok(c) => c.with_socket_override(cli.socket),
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(1);
@@ -39,6 +42,6 @@ async fn main() -> ExitCode {
 async fn run(command: Option<Command>, config: Config) -> Result<(), TraydBinError> {
     match command.unwrap_or(Command::Run) {
         Command::Run => daemon::run(&config).await,
-        Command::Ping => ipc::ping(&config.socket_path).await,
+        Command::Ping => ipc::ping(&config.socket_path()?).await,
     }
 }
