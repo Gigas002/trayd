@@ -35,6 +35,9 @@ use crate::{
 
 const SNI_WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
 const SNI_WATCHER_PATH: &str = "/StatusNotifierWatcher";
+/// Longest wait for any D-Bus reply.  A hung tray app must not stall an
+/// `activate` or `get_menu` forever.
+const METHOD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Capacity of the HostEvent broadcast channel.
 const EVENTS_CAPACITY: usize = 64;
 
@@ -49,6 +52,10 @@ struct HostState {
     /// that the proxy, its property-cache task, and all signal subscriptions are
     /// cleaned up immediately rather than leaking until the process is restarted.
     item_tasks: HashMap<ItemId, tokio::task::JoinHandle<()>>,
+    /// Registrations whose properties are still being fetched, by bus name.
+    /// Dropped when that name leaves the bus, so the fetch cannot insert an
+    /// item for an app that is already gone.
+    pending: HashMap<ItemId, String>,
 }
 
 impl HostState {
@@ -57,6 +64,7 @@ impl HostState {
             items: HashMap::new(),
             pixmap_cache: HashMap::new(),
             item_tasks: HashMap::new(),
+            pending: HashMap::new(),
         }
     }
 
@@ -148,6 +156,7 @@ impl TrayHost {
             .name(SNI_WATCHER_NAME)
             .replace_existing_names(false)
             .allow_name_replacements(false)
+            .method_timeout(METHOD_TIMEOUT)
             .build()
             .await?;
         info!("claimed D-Bus name {SNI_WATCHER_NAME}; watcher at {SNI_WATCHER_PATH}");
@@ -506,7 +515,7 @@ async fn run_dbus_loop(
             error!(%e, "failed to create FDO proxy; item removal tracking disabled");
             // Still process registrations, just without removal tracking.
             while let Some(msg) = watcher_rx.recv().await {
-                handle_item_registered(&conn, &inner, msg).await;
+                begin_registration(&conn, &inner, msg).await;
             }
             return;
         }
@@ -517,7 +526,7 @@ async fn run_dbus_loop(
         Err(e) => {
             error!(%e, "failed to subscribe to NameOwnerChanged; removal tracking disabled");
             while let Some(msg) = watcher_rx.recv().await {
-                handle_item_registered(&conn, &inner, msg).await;
+                begin_registration(&conn, &inner, msg).await;
             }
             return;
         }
@@ -528,7 +537,7 @@ async fn run_dbus_loop(
         tokio::select! {
             msg = watcher_rx.recv() => {
                 match msg {
-                    Some(watcher_msg) => handle_item_registered(&conn, &inner, watcher_msg).await,
+                    Some(watcher_msg) => begin_registration(&conn, &inner, watcher_msg).await,
                     None => {
                         info!("watcher channel closed, stopping host loop");
                         break;
@@ -544,11 +553,29 @@ async fn run_dbus_loop(
 
 // ─── Registration handler ─────────────────────────────────────────────────────
 
+/// Record the registration as pending and fetch the app's properties in a
+/// task of its own: a slow or hung app delays only its own item.
+async fn begin_registration(conn: &zbus::Connection, inner: &Arc<TrayHostInner>, msg: WatcherMsg) {
+    let WatcherMsg::ItemRegistered {
+        service_id,
+        bus_name,
+        ..
+    } = &msg;
+    inner
+        .state
+        .write()
+        .await
+        .pending
+        .insert(ItemId(service_id.clone()), bus_name.clone());
+    tokio::spawn(handle_item_registered(conn.clone(), Arc::clone(inner), msg));
+}
+
 async fn handle_item_registered(
-    conn: &zbus::Connection,
-    inner: &Arc<TrayHostInner>,
+    conn: zbus::Connection,
+    inner: Arc<TrayHostInner>,
     msg: WatcherMsg,
 ) {
+    let conn = &conn;
     let WatcherMsg::ItemRegistered {
         service_id,
         bus_name,
@@ -560,6 +587,12 @@ async fn handle_item_registered(
         Ok(p) => p,
         Err(e) => {
             warn!(%e, %bus_name, "failed to build StatusNotifierItem proxy");
+            inner
+                .state
+                .write()
+                .await
+                .pending
+                .remove(&ItemId(service_id));
             return;
         }
     };
@@ -577,15 +610,19 @@ async fn handle_item_registered(
 
     // Spawn a per-item signal watcher to keep the cache fresh, then store
     // the handle so it can be aborted when the item is removed.
+    let mut state = inner.state.write().await;
+    if state.pending.remove(&id).is_none() {
+        // The app left the bus while we were reading its properties.
+        debug!(%service_id, "app left during registration; not adding it");
+        return;
+    }
     let handle = tokio::spawn(run_item_signal_watcher(
         conn.clone(),
-        Arc::clone(inner),
+        Arc::clone(&inner),
         id.clone(),
         bus_name.to_owned(),
         object_path.to_owned(),
     ));
-
-    let mut state = inner.state.write().await;
     state.set_item_task(id.clone(), handle);
     state.items.insert(id, item.clone());
     let _ = inner.events_tx.send(HostEvent::ItemAdded(item));
@@ -613,6 +650,9 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
     debug!(%gone, "bus name disappeared, checking for registered items");
 
     let mut state = inner.state.write().await;
+    let pending_before = state.pending.len();
+    state.pending.retain(|_, bus_name| *bus_name != gone);
+    let cancelled_pending = state.pending.len() != pending_before;
     let ids_to_remove: Vec<ItemId> = state
         .items
         .values()
@@ -620,7 +660,7 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
         .map(|item| item.id.clone())
         .collect();
 
-    if ids_to_remove.is_empty() {
+    if ids_to_remove.is_empty() && !cancelled_pending {
         return;
     }
 

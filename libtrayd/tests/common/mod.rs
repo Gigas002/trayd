@@ -383,6 +383,11 @@ impl FakeApp {
             .map(|_| ())
     }
 
+    /// Disconnect from the bus, even while a method call is still pending.
+    pub async fn leave(self) {
+        self.conn.close().await.unwrap();
+    }
+
     /// The unique bus name of this app.
     pub fn unique_name(&self) -> String {
         self.conn.unique_name().unwrap().to_string()

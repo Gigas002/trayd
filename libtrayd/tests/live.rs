@@ -175,3 +175,56 @@ async fn removing_an_app_keeps_apps_whose_name_extends_it() {
     .await;
     assert_eq!(common::registered_items(&bus).await, ["org.example.P2"]);
 }
+
+#[tokio::test]
+async fn a_hung_app_does_not_block_other_registrations() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let hung = FakeApp::new(
+        &bus,
+        FakeState {
+            hang: true,
+            ..FakeState::default()
+        },
+    )
+    .await;
+    hung.register_as("org.example.Hung").await;
+    common::wait_app(&hung, "host started reading", |s| s.property_reads > 0).await;
+
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fine").await;
+    wait_for(&host, "fine app listed despite the hung one", |i| {
+        i.iter().any(|it| it.id.to_string() == "org.example.Fine")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_app_leaving_during_registration_leaves_no_ghost() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let hung = FakeApp::new(
+        &bus,
+        FakeState {
+            hang: true,
+            ..FakeState::default()
+        },
+    )
+    .await;
+    hung.register_as("org.example.Gone").await;
+    common::wait_app(&hung, "host started reading", |s| s.property_reads > 0).await;
+    hung.leave().await;
+
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fine").await;
+    wait_for(&host, "fine app listed", |i| !i.is_empty()).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let ids: Vec<_> = host
+        .items()
+        .await
+        .iter()
+        .map(|i| i.id.to_string())
+        .collect();
+    assert_eq!(ids, ["org.example.Fine"]);
+    assert_eq!(common::registered_items(&bus).await, ["org.example.Fine"]);
+}
