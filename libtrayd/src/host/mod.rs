@@ -746,6 +746,63 @@ pub(crate) fn resolve_icon_name(
     }
 }
 
+/// Where registration reads an app's properties from: one `GetAll` round
+/// trip instead of thirteen `Get`s.
+enum Props {
+    /// The `GetAll` reply.
+    All(HashMap<String, OwnedVariant>),
+    /// The app answered `GetAll` with an error: read properties one by one.
+    Single,
+    /// The app did not answer at all (timeout, gone): don't wait on it once
+    /// per property.
+    Unreachable(zbus::Error),
+}
+
+impl Props {
+    async fn load(proxy: &StatusNotifierItemProxy<'_>) -> Self {
+        let inner = proxy.inner();
+        let reply = inner
+            .connection()
+            .call_method(
+                Some(inner.destination()),
+                inner.path(),
+                Some("org.freedesktop.DBus.Properties"),
+                "GetAll",
+                &(inner.interface(),),
+            )
+            .await;
+        match reply.and_then(|m| m.body().deserialize::<HashMap<String, OwnedVariant>>()) {
+            Ok(all) => Self::All(all),
+            Err(e @ zbus::Error::MethodError(..)) => {
+                debug!(%e, "GetAll refused; reading properties one by one");
+                Self::Single
+            }
+            Err(e) => Self::Unreachable(e),
+        }
+    }
+
+    /// Property `name`, from the `GetAll` reply or through `single`.
+    async fn read<T>(
+        &self,
+        name: &str,
+        single: impl std::future::Future<Output = zbus::Result<T>>,
+    ) -> zbus::Result<T>
+    where
+        T: TryFrom<OwnedVariant>,
+    {
+        match self {
+            Self::All(all) => {
+                let value = all
+                    .get(name)
+                    .ok_or_else(|| zbus::Error::Failure(format!("no property {name}")))?;
+                T::try_from(value.try_clone()?).map_err(|_| zbus::Error::IncorrectType)
+            }
+            Self::Single => single.await,
+            Self::Unreachable(e) => Err(e.clone()),
+        }
+    }
+}
+
 async fn fetch_item_properties(
     proxy: &StatusNotifierItemProxy<'_>,
     service_id: &str,
@@ -753,60 +810,90 @@ async fn fetch_item_properties(
     object_path: &str,
     well_known_name: Option<&str>,
 ) -> TrayItem {
-    let title = proxy.title().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch title");
-        String::new()
-    });
-    let status = TrayStatus::from_dbus(&proxy.status().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch status");
-        String::new()
-    }));
-    let icon_name = proxy.icon_name().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch icon_name");
-        String::new()
-    });
+    let props = Props::load(proxy).await;
+    let title = props
+        .read("Title", proxy.title())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch title");
+            String::new()
+        });
+    let status = TrayStatus::from_dbus(&props.read("Status", proxy.status()).await.unwrap_or_else(
+        |e| {
+            warn!(%e, %service_id, "failed to fetch status");
+            String::new()
+        },
+    ));
+    let icon_name = props
+        .read("IconName", proxy.icon_name())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch icon_name");
+            String::new()
+        });
     // Priority: explicit `IconName` → well-known bus name (e.g. `org.telegram.desktop`)
     // → SNI `Id` as a last resort (e.g. `TelegramDesktop`).
-    let sni_id = proxy.id().await.unwrap_or_else(|e| {
+    let sni_id = props.read("Id", proxy.id()).await.unwrap_or_else(|e| {
         warn!(%e, %service_id, "failed to fetch id");
         String::new()
     });
     let icon_name = resolve_icon_name(icon_name, well_known_name, sni_id);
-    let raw_pixmaps = proxy.icon_pixmap().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch icon_pixmap");
-        Vec::new()
-    });
-    let category = proxy.category().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch category");
-        String::new()
-    });
+    let raw_pixmaps = props
+        .read("IconPixmap", proxy.icon_pixmap())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch icon_pixmap");
+            Vec::new()
+        });
+    let category = props
+        .read("Category", proxy.category())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch category");
+            String::new()
+        });
     // Defer resolving item_is_menu until after menu_path is known — if the
     // property is absent (e.g. Ayatana/AppIndicator items like nm-applet) we
     // fall back to "true" whenever a valid menu path exists, which prevents a
     // crash from calling Activate on an item that only exposes a menu.
-    let item_is_menu_result = proxy.item_is_menu().await;
-    let raw_tool_tip = proxy.tool_tip().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch tool_tip");
-        Default::default()
-    });
-    let overlay_icon_name = proxy.overlay_icon_name().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch overlay_icon_name");
-        String::new()
-    });
-    let raw_overlay_pixmaps = proxy.overlay_icon_pixmap().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch overlay_icon_pixmap");
-        Vec::new()
-    });
-    let attention_icon_name = proxy.attention_icon_name().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch attention_icon_name");
-        String::new()
-    });
-    let raw_attention_pixmaps = proxy.attention_icon_pixmap().await.unwrap_or_else(|e| {
-        warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
-        Vec::new()
-    });
-    let menu_path = proxy
-        .menu_path()
+    let item_is_menu_result = props.read("ItemIsMenu", proxy.item_is_menu()).await;
+    let raw_tool_tip = props
+        .read("ToolTip", proxy.tool_tip())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch tool_tip");
+            Default::default()
+        });
+    let overlay_icon_name = props
+        .read("OverlayIconName", proxy.overlay_icon_name())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch overlay_icon_name");
+            String::new()
+        });
+    let raw_overlay_pixmaps = props
+        .read("OverlayIconPixmap", proxy.overlay_icon_pixmap())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch overlay_icon_pixmap");
+            Vec::new()
+        });
+    let attention_icon_name = props
+        .read("AttentionIconName", proxy.attention_icon_name())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch attention_icon_name");
+            String::new()
+        });
+    let raw_attention_pixmaps = props
+        .read("AttentionIconPixmap", proxy.attention_icon_pixmap())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
+            Vec::new()
+        });
+    let menu_path = props
+        .read("Menu", proxy.menu_path())
         .await
         .map(|p| p.to_string())
         .unwrap_or_else(|e| {
