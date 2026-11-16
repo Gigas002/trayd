@@ -55,6 +55,14 @@ impl Config {
         Ok(Self::default())
     }
 
+    /// Replace `socket_path` when `socket` (from `--socket`) is given.
+    pub fn with_socket_override(mut self, socket: Option<PathBuf>) -> Self {
+        if socket.is_some() {
+            self.socket_path = socket;
+        }
+        self
+    }
+
     /// The IPC socket: `socket_path` from the config, else
     /// `$XDG_RUNTIME_DIR/trayd.sock`.
     ///

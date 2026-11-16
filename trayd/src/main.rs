@@ -20,7 +20,8 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let config = match Config::load(cli.config.as_deref()) {
-        Ok(c) => c,
+        // CLI > config file > defaults.
+        Ok(c) => c.with_socket_override(cli.socket),
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(1);

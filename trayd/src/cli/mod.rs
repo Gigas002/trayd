@@ -9,6 +9,11 @@ pub struct Cli {
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
+    /// IPC socket path; overrides `socket_path` from the config
+    /// (default: $XDG_RUNTIME_DIR/trayd.sock).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub socket: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

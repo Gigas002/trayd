@@ -55,3 +55,18 @@ fn load_explicit_missing_path_errors() {
     let result = Config::load(Some(std::path::Path::new("/nonexistent/path/trayd.toml")));
     assert!(result.is_err());
 }
+
+#[test]
+fn socket_flag_overrides_the_config_file() {
+    let cfg: Config = toml::from_str(r#"socket_path = "/from/config.sock""#).unwrap();
+    let kept = Config { ..cfg }.with_socket_override(None);
+    assert_eq!(
+        kept.socket_path.as_deref(),
+        Some(std::path::Path::new("/from/config.sock"))
+    );
+    let overridden = kept.with_socket_override(Some("/from/cli.sock".into()));
+    assert_eq!(
+        overridden.socket_path.as_deref(),
+        Some(std::path::Path::new("/from/cli.sock"))
+    );
+}
