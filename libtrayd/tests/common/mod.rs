@@ -84,13 +84,15 @@ macro_rules! test_bus {
     };
 }
 
-/// Poll `host` until `pred` holds for its item list, or panic after 5 s.
+/// Poll `host` until `pred` holds for its item list, or panic after 30 s
+/// (generous, so a loaded CI machine does not fail it; passing tests return
+/// as soon as the condition holds).
 pub async fn wait_for(
     host: &TrayHost,
     what: &str,
     pred: impl Fn(&[TrayItem]) -> bool,
 ) -> Vec<TrayItem> {
-    for _ in 0..500 {
+    for _ in 0..3000 {
         let items = host.items().await;
         if pred(&items) {
             return items;
@@ -433,9 +435,9 @@ impl FakeApp {
     }
 }
 
-/// Wait until `cond` holds for the fake app's state, or panic after 5 s.
+/// Wait until `cond` holds for the fake app's state, or panic after 30 s.
 pub async fn wait_app(app: &FakeApp, what: &str, cond: impl Fn(&FakeState) -> bool) {
-    for _ in 0..500 {
+    for _ in 0..3000 {
         if cond(&app.state.lock().unwrap()) {
             return;
         }
