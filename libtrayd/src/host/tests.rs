@@ -225,3 +225,12 @@ fn pixmaps_from_dbus_keeps_only_consistent_pixmaps() {
     let dims: Vec<_> = kept.iter().map(|p| (p.width, p.height)).collect();
     assert_eq!(dims, [(1, 1), (2, 3)]);
 }
+
+#[test]
+fn strip_mnemonics_follows_dbusmenu_rules() {
+    assert_eq!(strip_mnemonics("_Open"), "Open");
+    assert_eq!(strip_mnemonics("Save __as"), "Save _as");
+    assert_eq!(strip_mnemonics("a_b_c"), "abc");
+    assert_eq!(strip_mnemonics("trailing_"), "trailing_");
+    assert_eq!(strip_mnemonics("plain"), "plain");
+}

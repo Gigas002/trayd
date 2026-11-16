@@ -46,6 +46,12 @@ pub trait DBusMenu {
         property_names: &[&str],
     ) -> zbus::Result<(u32, (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>))>;
 
+    /// Tell the app that the menu `id` is about to be shown.
+    ///
+    /// Many apps (Qt, Electron, libdbusmenu) fill a submenu only once this is
+    /// called.  Returns whether the layout changed.
+    async fn about_to_show(&self, id: i32) -> zbus::Result<bool>;
+
     /// Emitted when the menu layout changes.
     #[zbus(signal)]
     async fn layout_updated(&self, revision: u32, parent: i32) -> zbus::Result<()>;

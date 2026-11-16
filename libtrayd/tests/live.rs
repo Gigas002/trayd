@@ -310,3 +310,67 @@ async fn a_burst_of_change_signals_neither_freezes_nor_floods_the_host() {
     let reads = app.property_reads() - reads_before;
     assert!(reads < 100, "500 signals caused {reads} property reads");
 }
+
+#[tokio::test]
+async fn menus_report_what_a_user_sees() {
+    use common::{Prop, Row};
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(
+        &bus,
+        FakeState {
+            menu: vec![
+                Row::label(1, "_Open window"),
+                Row {
+                    id: 2,
+                    props: vec![("type", Prop::Str("separator"))],
+                    children: None,
+                },
+                Row::label(3, "Disabled").with("enabled", Prop::Bool(false)),
+                Row::label(4, "Do not disturb")
+                    .with("toggle-type", Prop::Str("checkmark"))
+                    .with("toggle-state", Prop::Int(1)),
+                Row::label(5, "Save __as").with("toggle-type", Prop::Str("radio")),
+                Row::label(6, "More").submenu(vec![Row::label(61, "Inner")]),
+            ],
+            lazy_submenus: vec![6],
+            ..FakeState::default()
+        },
+    )
+    .await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    let menu = host.get_menu(&id, None).await.unwrap();
+    let rows: Vec<_> = menu
+        .iter()
+        .map(|n| {
+            (
+                n.id,
+                n.label.as_str(),
+                n.enabled,
+                n.is_separator,
+                n.toggle_state,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (1, "Open window", true, false, None),
+            (2, "", true, true, None),
+            (3, "Disabled", false, false, None),
+            (4, "Do not disturb", true, false, Some(true)),
+            (5, "Save _as", true, false, Some(false)),
+            (6, "More", true, false, None),
+        ]
+    );
+
+    // "More" fills its children only once it is about to be shown.
+    let sub = host.get_menu(&id, Some(6)).await.unwrap();
+    let labels: Vec<_> = sub.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(labels, ["Inner"]);
+    assert!(app.state.lock().unwrap().about_to_show.contains(&6));
+}

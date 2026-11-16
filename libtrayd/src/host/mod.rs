@@ -360,6 +360,12 @@ impl TrayHost {
         let proxy = build_menu_proxy(&self.inner.conn, &bus_name, &menu_path).await?;
         let parent_id = submenu_id.map(|n| n as i32).unwrap_or(0);
 
+        // Apps that build menus lazily need this first; the ones that don't
+        // implement it answer with an error, which changes nothing.
+        if let Err(e) = proxy.about_to_show(parent_id).await {
+            debug!(%e, %id, parent_id, "AboutToShow failed");
+        }
+
         let (_revision, (_root_id, _root_props, children)) = proxy
             .get_layout(parent_id, 1, &[])
             .await
@@ -454,7 +460,7 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     let (id, props, nested_children): (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>) =
         ov.try_into().ok()?;
 
-    let label = get_str_prop(&props, "label");
+    let label = strip_mnemonics(&get_str_prop(&props, "label"));
     let enabled = get_bool_prop(&props, "enabled").unwrap_or(true);
     let visible = get_bool_prop(&props, "visible").unwrap_or(true);
     let icon_name = get_str_prop(&props, "icon-name");
@@ -462,6 +468,16 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     // (the latter occurs when GetLayout was called with depth > 1).
     let is_submenu = props.contains_key("children-display") || !nested_children.is_empty();
     let children = menu_nodes_from_av(nested_children);
+    let is_separator = get_str_prop(&props, "type") == "separator";
+    let toggle_state = match get_str_prop(&props, "toggle-type").as_str() {
+        "checkmark" | "radio" => Some(
+            props
+                .get("toggle-state")
+                .and_then(|v| i32::try_from(v.clone()).ok())
+                == Some(1),
+        ),
+        _ => None,
+    };
 
     Some(MenuNode {
         id,
@@ -470,8 +486,28 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
         visible,
         icon_name,
         is_submenu,
+        is_separator,
+        toggle_state,
         children,
     })
+}
+
+/// Remove DBusMenu access-key markers: `_` before a character marks it as
+/// the mnemonic, `__` is a literal underscore.
+pub(crate) fn strip_mnemonics(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    let mut chars = label.chars();
+    while let Some(c) = chars.next() {
+        if c == '_' {
+            match chars.next() {
+                Some(next) => out.push(next),
+                None => out.push('_'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Convert pixmaps as received over D-Bus, dropping malformed ones.

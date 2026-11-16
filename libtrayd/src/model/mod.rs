@@ -128,7 +128,8 @@ impl IconData {
 pub struct MenuNode {
     /// DBusMenu item id.
     pub id: i32,
-    /// Display label (empty string for separators).
+    /// Display label, with DBusMenu mnemonic markers removed (`_Open` becomes
+    /// `Open`, `__` becomes `_`).  Empty for separators.
     pub label: String,
     /// Whether the item can be selected.
     pub enabled: bool,
@@ -138,6 +139,11 @@ pub struct MenuNode {
     pub icon_name: String,
     /// `true` when this node represents a submenu (children not yet fetched).
     pub is_submenu: bool,
+    /// `true` for a separator line (DBusMenu `type` = `"separator"`).
+    pub is_separator: bool,
+    /// For check and radio items, whether the item is on; `None` for plain
+    /// items.
+    pub toggle_state: Option<bool>,
     /// Direct children (populated on demand).
     pub children: Vec<MenuNode>,
 }
