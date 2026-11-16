@@ -409,9 +409,14 @@ async fn build_proxy<'c>(
     bus_name: &'c str,
     object_path: &'c str,
 ) -> Result<StatusNotifierItemProxy<'c>, TraydError> {
+    // No property cache: zbus refreshes cached values only on the standard
+    // `PropertiesChanged` signal, which SNI apps don't emit.  They announce
+    // changes with `NewTitle`/`NewIcon`/… instead, and a cached proxy would
+    // keep serving the first value it ever read.
     StatusNotifierItemProxy::builder(conn)
         .destination(bus_name)
         .path(object_path)
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await
         .map_err(TraydError::DBus)
@@ -425,6 +430,7 @@ async fn build_menu_proxy<'c>(
     DBusMenuProxy::builder(conn)
         .destination(bus_name.to_owned())
         .path(menu_path.to_owned())
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await
         .map_err(TraydError::DBus)

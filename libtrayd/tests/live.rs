@@ -114,3 +114,23 @@ async fn second_host_does_not_take_over_the_watcher() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn every_change_signal_refreshes_the_item() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    wait_for(&host, "item listed", |i| i.len() == 1).await;
+
+    // Several rounds: a property cache would serve the first value forever.
+    for round in 1..=3 {
+        let title = format!("Title {round}");
+        app.set_title(&title).await;
+        wait_for(&host, &title, |i| i[0].title == title).await;
+
+        let icon = format!("icon-{round}");
+        app.set_icon_name(&icon).await;
+        wait_for(&host, &icon, |i| i[0].icon.name == icon).await;
+    }
+}
