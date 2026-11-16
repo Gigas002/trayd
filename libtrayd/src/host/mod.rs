@@ -65,6 +65,14 @@ impl HostState {
         self.pixmap_cache.retain(|(item_id, _), _| item_id != id);
     }
 
+    /// Track the signal-watcher task of `id`, aborting the one it replaces
+    /// (a detached task would keep its proxy and match rules forever).
+    fn set_item_task(&mut self, id: ItemId, handle: tokio::task::JoinHandle<()>) {
+        if let Some(old) = self.item_tasks.insert(id, handle) {
+            old.abort();
+        }
+    }
+
     /// Remove an item and abort its associated signal-watcher task.
     fn remove_item(&mut self, id: &ItemId) {
         self.items.remove(id);
@@ -578,7 +586,7 @@ async fn handle_item_registered(
     ));
 
     let mut state = inner.state.write().await;
-    state.item_tasks.insert(id.clone(), handle);
+    state.set_item_task(id.clone(), handle);
     state.items.insert(id, item.clone());
     let _ = inner.events_tx.send(HostEvent::ItemAdded(item));
     debug!(%service_id, "item added to cache");

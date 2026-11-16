@@ -249,3 +249,17 @@ fn tray_item_tool_tip_defaults_empty() {
         "tool_tip.icon_name defaults to empty"
     );
 }
+
+#[tokio::test]
+async fn replacing_an_item_task_aborts_the_old_one() {
+    let mut state = HostState::new();
+    let id = ItemId::from("org.example.App");
+    let first = tokio::spawn(std::future::pending::<()>());
+    let first_abort = first.abort_handle();
+    state.set_item_task(id.clone(), first);
+
+    state.set_item_task(id.clone(), tokio::spawn(std::future::pending::<()>()));
+    tokio::task::yield_now().await;
+    assert!(first_abort.is_finished(), "replaced task must be aborted");
+    assert_eq!(state.item_tasks.len(), 1);
+}
