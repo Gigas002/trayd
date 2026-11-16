@@ -263,3 +263,25 @@ async fn replacing_an_item_task_aborts_the_old_one() {
     assert!(first_abort.is_finished(), "replaced task must be aborted");
     assert_eq!(state.item_tasks.len(), 1);
 }
+
+#[test]
+fn items_keep_registration_order() {
+    let ids = |state: &HostState| -> Vec<String> {
+        state
+            .sorted_items()
+            .iter()
+            .map(|i| i.id.to_string())
+            .collect()
+    };
+    let mut state = HostState::new();
+    for id in ["c", "a", "b"] {
+        state.insert_item(dummy_item(id));
+    }
+    assert_eq!(ids(&state), ["c", "a", "b"]);
+
+    // Updating an item keeps its place; a returning item goes last.
+    state.insert_item(dummy_item("c"));
+    state.remove_item(&ItemId::from("a"));
+    state.insert_item(dummy_item("a"));
+    assert_eq!(ids(&state), ["c", "b", "a"]);
+}

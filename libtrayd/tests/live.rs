@@ -228,3 +228,24 @@ async fn an_app_leaving_during_registration_leaves_no_ghost() {
     assert_eq!(ids, ["org.example.Fine"]);
     assert_eq!(common::registered_items(&bus).await, ["org.example.Fine"]);
 }
+
+#[tokio::test]
+async fn items_are_listed_in_registration_order() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let mut apps = Vec::new();
+    let names: Vec<String> = (0..10).map(|n| format!("org.example.App{n}")).collect();
+    for (n, name) in names.iter().enumerate() {
+        let app = FakeApp::new(&bus, FakeState::default()).await;
+        app.register_as(name).await;
+        wait_for(&host, name, |i| i.len() == n + 1).await;
+        apps.push(app);
+    }
+    let ids: Vec<String> = host
+        .items()
+        .await
+        .iter()
+        .map(|i| i.id.to_string())
+        .collect();
+    assert_eq!(ids, names);
+}

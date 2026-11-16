@@ -56,6 +56,10 @@ struct HostState {
     /// Dropped when that name leaves the bus, so the fetch cannot insert an
     /// item for an app that is already gone.
     pending: HashMap<ItemId, String>,
+    /// Registration sequence number per item: lists come out in this order,
+    /// so icons keep their place in a bar instead of following hash order.
+    order: HashMap<ItemId, u64>,
+    next_order: u64,
 }
 
 impl HostState {
@@ -65,6 +69,8 @@ impl HostState {
             pixmap_cache: HashMap::new(),
             item_tasks: HashMap::new(),
             pending: HashMap::new(),
+            order: HashMap::new(),
+            next_order: 0,
         }
     }
 
@@ -81,9 +87,26 @@ impl HostState {
         }
     }
 
+    /// Add or replace an item; a new item goes after all existing ones.
+    fn insert_item(&mut self, item: TrayItem) {
+        if !self.order.contains_key(&item.id) {
+            self.order.insert(item.id.clone(), self.next_order);
+            self.next_order += 1;
+        }
+        self.items.insert(item.id.clone(), item);
+    }
+
+    /// All items in registration order.
+    fn sorted_items(&self) -> Vec<TrayItem> {
+        let mut items: Vec<&TrayItem> = self.items.values().collect();
+        items.sort_by_key(|item| self.order.get(&item.id).copied().unwrap_or(u64::MAX));
+        items.into_iter().cloned().collect()
+    }
+
     /// Remove an item and abort its associated signal-watcher task.
     fn remove_item(&mut self, id: &ItemId) {
         self.items.remove(id);
+        self.order.remove(id);
         self.invalidate_pixmap_cache(id);
         if let Some(handle) = self.item_tasks.remove(id) {
             handle.abort();
@@ -192,16 +215,9 @@ impl TrayHost {
         self.inner.events_tx.subscribe()
     }
 
-    /// Snapshot of all currently cached items.
+    /// Snapshot of all currently cached items, in registration order.
     pub async fn items(&self) -> Vec<TrayItem> {
-        self.inner
-            .state
-            .read()
-            .await
-            .items
-            .values()
-            .cloned()
-            .collect()
+        self.inner.state.read().await.sorted_items()
     }
 
     /// Look up a single item by id.
@@ -624,7 +640,7 @@ async fn handle_item_registered(
         object_path.to_owned(),
     ));
     state.set_item_task(id.clone(), handle);
-    state.items.insert(id, item.clone());
+    state.insert_item(item.clone());
     let _ = inner.events_tx.send(HostEvent::ItemAdded(item));
     debug!(%service_id, "item added to cache");
 }
