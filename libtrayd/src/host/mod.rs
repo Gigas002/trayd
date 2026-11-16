@@ -45,9 +45,6 @@ const EVENTS_CAPACITY: usize = 64;
 
 struct HostState {
     items: HashMap<ItemId, TrayItem>,
-    /// Derived pixmap cache: `(app_id, requested_size_px)` → best-matched ARGB32 bytes.
-    /// Invalidated on icon change signals and item removal.
-    pixmap_cache: HashMap<(ItemId, u16), PixmapData>,
     /// Per-item signal-watcher task handles.  Aborted when the item is removed so
     /// that the proxy, its property-cache task, and all signal subscriptions are
     /// cleaned up immediately rather than leaking until the process is restarted.
@@ -66,17 +63,11 @@ impl HostState {
     fn new() -> Self {
         Self {
             items: HashMap::new(),
-            pixmap_cache: HashMap::new(),
             item_tasks: HashMap::new(),
             pending: HashMap::new(),
             order: HashMap::new(),
             next_order: 0,
         }
-    }
-
-    /// Remove all pixmap cache entries for `id`.
-    fn invalidate_pixmap_cache(&mut self, id: &ItemId) {
-        self.pixmap_cache.retain(|(item_id, _), _| item_id != id);
     }
 
     /// Track the signal-watcher task of `id`, aborting the one it replaces
@@ -107,7 +98,6 @@ impl HostState {
     fn remove_item(&mut self, id: &ItemId) {
         self.items.remove(id);
         self.order.remove(id);
-        self.invalidate_pixmap_cache(id);
         if let Some(handle) = self.item_tasks.remove(id) {
             handle.abort();
         }
@@ -227,10 +217,9 @@ impl TrayHost {
 
     /// Fetch raw ARGB32 pixmap bytes for an item at approximately `size` pixels.
     ///
-    /// Uses the in-process item cache; no D-Bus round-trip after the initial
-    /// registration fetch.  Results are memoised in a derived pixmap cache
-    /// keyed by `(app_id, size)` and invalidated when icon or status signals
-    /// arrive.
+    /// Picks among the pixmaps held in the item cache: no D-Bus round-trip.
+    /// Nothing is stored per requested size, so clients asking for many sizes
+    /// cannot grow the daemon's memory.
     ///
     /// When the item's status is [`TrayStatus::NeedsAttention`] and the item
     /// has attention pixmap data, that is served instead of the normal icon.
@@ -239,60 +228,39 @@ impl TrayHost {
     ///
     /// - [`TraydError::NotFound`] if the item or its pixmap data is absent.
     pub async fn get_pixmap(&self, id: &ItemId, size: u16) -> Result<PixmapData, TraydError> {
-        // Fast path: return from derived pixmap cache.
+        let state = self.inner.state.read().await;
+        let item = state
+            .items
+            .get(id)
+            .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
+
+        // Prefer attention icon when the item signals urgency and has pixmaps.
+        let icon = if item.status == TrayStatus::NeedsAttention
+            && !item.attention_icon.pixmaps.is_empty()
         {
-            let state = self.inner.state.read().await;
-            if let Some(cached) = state.pixmap_cache.get(&(id.clone(), size)) {
-                return Ok(cached.clone());
-            }
-        }
-
-        // Slow path: pick the best pixmap from the in-process item cache.
-        let result = {
-            let state = self.inner.state.read().await;
-            let item = state
-                .items
-                .get(id)
-                .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
-
-            // Prefer attention icon when the item signals urgency and has pixmaps.
-            let icon = if item.status == TrayStatus::NeedsAttention
-                && !item.attention_icon.pixmaps.is_empty()
-            {
-                &item.attention_icon
-            } else {
-                &item.icon
-            };
-
-            if icon.pixmaps.is_empty() {
-                return Err(TraydError::NotFound(format!("no pixmap for {id}")));
-            }
-
-            // Pick the nearest width; on a tie prefer the larger pixmap, which
-            // scales down better than a small one scales up.
-            let best = icon
-                .pixmaps
-                .iter()
-                .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))
-                .expect("pixmaps is non-empty");
-
-            // `pixmaps_from_dbus` guarantees positive dimensions.
-            PixmapData {
-                width: best.width.unsigned_abs(),
-                height: best.height.unsigned_abs(),
-                data: best.data.clone(),
-            }
+            &item.attention_icon
+        } else {
+            &item.icon
         };
 
-        // Memoise for subsequent calls with the same size.
-        {
-            let mut state = self.inner.state.write().await;
-            state
-                .pixmap_cache
-                .insert((id.clone(), size), result.clone());
+        if icon.pixmaps.is_empty() {
+            return Err(TraydError::NotFound(format!("no pixmap for {id}")));
         }
 
-        Ok(result)
+        // Pick the nearest width; on a tie prefer the larger pixmap, which
+        // scales down better than a small one scales up.
+        let best = icon
+            .pixmaps
+            .iter()
+            .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))
+            .expect("pixmaps is non-empty");
+
+        // `pixmaps_from_dbus` guarantees positive dimensions.
+        Ok(PixmapData {
+            width: best.width.unsigned_abs(),
+            height: best.height.unsigned_abs(),
+            data: best.data.clone(),
+        })
     }
 
     /// Activate a tray item.
@@ -1004,8 +972,7 @@ async fn run_item_signal_watcher(
     debug!(%id, "item signal watcher ended");
 }
 
-/// Re-fetch the normal or attention icon from D-Bus, update the item cache,
-/// and invalidate the derived pixmap cache.
+/// Re-fetch the normal or attention icon from D-Bus and update the item cache.
 async fn on_icon_changed(
     inner: &Arc<TrayHostInner>,
     id: &ItemId,
@@ -1062,16 +1029,11 @@ async fn on_icon_changed(
             }
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            state.invalidate_pixmap_cache(id);
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
-        debug!(%id, attention, "icon updated and pixmap cache cleared");
+        debug!(%id, attention, "icon updated");
     }
 }
 
@@ -1100,8 +1062,8 @@ async fn on_title_changed(
     }
 }
 
-/// Update the item status and invalidate the pixmap cache (`NeedsAttention`
-/// changes which icon `get_pixmap` serves).
+/// Update the item status (`NeedsAttention` changes which icon `get_pixmap`
+/// serves).
 async fn on_status_changed(inner: &Arc<TrayHostInner>, id: &ItemId, new_status: TrayStatus) {
     let event = {
         let mut state = inner.state.write().await;
@@ -1109,16 +1071,11 @@ async fn on_status_changed(inner: &Arc<TrayHostInner>, id: &ItemId, new_status: 
             item.status = new_status;
             item.clone()
         });
-        if let Some(item_clone) = maybe_item {
-            state.invalidate_pixmap_cache(id);
-            Some(HostEvent::ItemChanged(item_clone))
-        } else {
-            None
-        }
+        maybe_item.map(HostEvent::ItemChanged)
     };
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
-        debug!(%id, "status updated and pixmap cache cleared");
+        debug!(%id, "status updated");
     }
 }
 

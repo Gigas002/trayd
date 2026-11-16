@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{IconData, ItemId, PixmapData, ToolTip, TrayItem, TrayStatus};
+use crate::model::{IconData, ItemId, ToolTip, TrayItem, TrayStatus};
 
 // ─── resolve_icon_name ────────────────────────────────────────────────────────────────
 
@@ -142,80 +142,6 @@ fn get_bool_prop_with_true() {
         .expect("OwnedVariant from bool");
     props.insert("enabled".to_owned(), ov);
     assert_eq!(get_bool_prop(&props, "enabled"), Some(true));
-}
-
-// ─── Pixmap cache ────────────────────────────────────────────────────────────────
-
-#[test]
-fn host_state_pixmap_cache_empty_initially() {
-    let state = HostState::new();
-    assert!(state.pixmap_cache.is_empty());
-}
-
-#[test]
-fn host_state_pixmap_cache_insert_and_retrieve() {
-    let mut state = HostState::new();
-    let id = ItemId("org.example.App".to_owned());
-    let pix = PixmapData {
-        width: 22,
-        height: 22,
-        data: vec![0xAA, 0xBB, 0xCC, 0xDD],
-    };
-    state.pixmap_cache.insert((id.clone(), 22), pix.clone());
-
-    let cached = state.pixmap_cache.get(&(id, 22));
-    assert!(cached.is_some());
-    assert_eq!(cached.unwrap().data, pix.data);
-    assert_eq!(cached.unwrap().width, 22);
-    assert_eq!(cached.unwrap().height, 22);
-}
-
-#[test]
-fn host_state_pixmap_cache_invalidation() {
-    let mut state = HostState::new();
-    let id = ItemId("org.example.App".to_owned());
-    state.pixmap_cache.insert(
-        (id.clone(), 16),
-        PixmapData {
-            width: 16,
-            height: 16,
-            data: vec![1, 2],
-        },
-    );
-    state.pixmap_cache.insert(
-        (id.clone(), 22),
-        PixmapData {
-            width: 22,
-            height: 22,
-            data: vec![3, 4],
-        },
-    );
-
-    // A different item's entry must survive.
-    let other = ItemId("org.other.App".to_owned());
-    state.pixmap_cache.insert(
-        (other.clone(), 22),
-        PixmapData {
-            width: 22,
-            height: 22,
-            data: vec![5, 6],
-        },
-    );
-
-    state.invalidate_pixmap_cache(&id);
-
-    assert!(
-        !state.pixmap_cache.contains_key(&(id.clone(), 16)),
-        "16px entry must be cleared"
-    );
-    assert!(
-        !state.pixmap_cache.contains_key(&(id.clone(), 22)),
-        "22px entry must be cleared"
-    );
-    assert!(
-        state.pixmap_cache.contains_key(&(other.clone(), 22)),
-        "other item entry must survive"
-    );
 }
 
 #[test]
