@@ -1,4 +1,4 @@
-use super::{App, MenuLevel, View};
+use super::{App, MenuLevel, Update, View};
 use crate::ipc::{MenuItem, MinimalTrayItem};
 
 fn make_tray_item(app_id: &str) -> MinimalTrayItem {
@@ -261,11 +261,58 @@ fn items_cursor_clamped_when_list_shrinks() {
         make_tray_item("c"),
     ]);
     app.items_cursor = 2;
-    // Simulate update_rx receiving fewer items (same logic as event_loop)
-    let new_items = vec![make_tray_item("a")];
-    app.tray_items = new_items;
-    if app.items_cursor >= app.tray_items.len() {
-        app.items_cursor = app.tray_items.len().saturating_sub(1);
-    }
+    app.apply_update(Update::Items(vec![make_tray_item("a")]));
     assert_eq!(app.items_cursor, 0);
+}
+
+#[test]
+fn cursor_follows_its_item_when_others_come_and_go() {
+    let mut app = items_app(vec![make_tray_item("a"), make_tray_item("b")]);
+    app.items_cursor = 1; // on "b"
+    app.apply_update(Update::Items(vec![
+        make_tray_item("new"),
+        make_tray_item("a"),
+        make_tray_item("b"),
+    ]));
+    assert_eq!(app.items_cursor, 2);
+    app.apply_update(Update::Items(vec![make_tray_item("b")]));
+    assert_eq!(app.items_cursor, 0);
+}
+
+#[test]
+fn open_menu_closes_when_its_item_leaves() {
+    let mut app = items_app(vec![make_tray_item("a"), make_tray_item("b")]);
+    app.view = View::Menu {
+        app_id: "a".into(),
+        stack: vec![MenuLevel {
+            submenu_id: None,
+            items: vec![make_menu_item(1, "Quit", false)],
+            cursor: 0,
+        }],
+    };
+    app.apply_update(Update::Items(vec![make_tray_item("b")]));
+    assert!(matches!(app.view, View::Items));
+    assert!(app.status_msg.as_deref().unwrap().contains("left the tray"));
+}
+
+#[test]
+fn disconnect_is_shown_until_items_arrive_again() {
+    let mut app = items_app(vec![make_tray_item("a")]);
+    app.apply_update(Update::Disconnected("connection closed".into()));
+    assert!(app.disconnected.is_some());
+    let screen = render(&app);
+    assert!(screen.contains("trayd unreachable"), "{screen}");
+    app.apply_update(Update::Items(vec![make_tray_item("a")]));
+    assert!(app.disconnected.is_none());
+}
+
+fn render(app: &App) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(70, 10)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let buffer = terminal.backend().buffer();
+    buffer
+        .content()
+        .chunks(buffer.area.width as usize)
+        .map(|row| row.iter().map(|c| c.symbol()).collect::<String>() + "\n")
+        .collect()
 }

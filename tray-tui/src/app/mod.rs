@@ -3,13 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -38,6 +33,15 @@ pub enum View {
     },
 }
 
+/// What the subscription task reports to the UI.
+#[derive(Debug)]
+pub enum Update {
+    /// A fresh snapshot of the tray.
+    Items(Vec<MinimalTrayItem>),
+    /// The daemon went away; the task keeps retrying.
+    Disconnected(String),
+}
+
 #[derive(Debug)]
 enum Action {
     OpenMenu(String),
@@ -57,6 +61,8 @@ pub struct App {
     items_cursor: usize,
     view: View,
     status_msg: Option<String>,
+    /// Why the daemon is unreachable, while it is.
+    disconnected: Option<String>,
 }
 
 impl App {
@@ -67,6 +73,7 @@ impl App {
             items_cursor: 0,
             view: View::Items,
             status_msg: None,
+            disconnected: None,
         }
     }
 
@@ -76,32 +83,29 @@ impl App {
         let initial_items = cmd.get_items().await?;
         drop(cmd);
 
-        let (update_tx, update_rx) = mpsc::channel::<Vec<MinimalTrayItem>>(32);
+        let (update_tx, update_rx) = mpsc::channel::<Update>(32);
         tokio::spawn(subscribe_task(socket_path.clone(), update_tx));
 
         let (input_tx, input_rx) = mpsc::channel::<Event>(32);
         tokio::task::spawn_blocking(move || input_task(input_tx));
 
-        enable_raw_mode()?;
-        let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+        // Log lines written to the terminal would draw over the UI.
+        crate::logger::pause();
+        // Also installs a panic hook that restores the terminal.
+        let mut terminal = ratatui::init();
 
         let mut app = App::new(socket_path, initial_items);
         let result = app.event_loop(&mut terminal, update_rx, input_rx).await;
 
-        let _ = disable_raw_mode();
-        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-        let _ = terminal.show_cursor();
-
+        ratatui::restore();
+        crate::logger::resume();
         result
     }
 
     async fn event_loop(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-        mut update_rx: mpsc::Receiver<Vec<MinimalTrayItem>>,
+        terminal: &mut DefaultTerminal,
+        mut update_rx: mpsc::Receiver<Update>,
         mut input_rx: mpsc::Receiver<Event>,
     ) -> Result<(), TuiError> {
         loop {
@@ -120,19 +124,45 @@ impl App {
                 }
                 update = update_rx.recv() => {
                     match update {
-                        Some(items) => {
-                            self.tray_items = items;
-                            if self.items_cursor >= self.tray_items.len() {
-                                self.items_cursor =
-                                    self.tray_items.len().saturating_sub(1);
-                            }
-                        }
+                        Some(update) => self.apply_update(update),
                         None => break,
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Take in news from the daemon.  The cursor stays on the same tray item
+    /// even when items come or go before it, and an open menu closes when its
+    /// item leaves the tray.
+    fn apply_update(&mut self, update: Update) {
+        let items = match update {
+            Update::Disconnected(reason) => {
+                self.disconnected = Some(reason);
+                return;
+            }
+            Update::Items(items) => items,
+        };
+        self.disconnected = None;
+        let selected = self
+            .tray_items
+            .get(self.items_cursor)
+            .map(|i| i.app_id.clone());
+        self.tray_items = items;
+        self.items_cursor = selected
+            .and_then(|id| self.tray_items.iter().position(|i| i.app_id == id))
+            .unwrap_or_else(|| {
+                self.items_cursor
+                    .min(self.tray_items.len().saturating_sub(1))
+            });
+
+        if let View::Menu { app_id, .. } = &self.view
+            && !self.tray_items.iter().any(|i| &i.app_id == app_id)
+        {
+            self.status_msg = Some(format!("{app_id} left the tray"));
+            self.view = View::Items;
+        }
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<bool, TuiError> {
@@ -394,6 +424,11 @@ impl App {
     fn render_status(&self, f: &mut ratatui::Frame, area: Rect) {
         let (text, style) = if let Some(msg) = &self.status_msg {
             (format!(" {msg}"), Style::default().fg(Color::Red))
+        } else if let Some(reason) = &self.disconnected {
+            (
+                format!(" trayd unreachable, retrying… ({reason})"),
+                Style::default().fg(Color::Yellow),
+            )
         } else {
             let hint = match &self.view {
                 View::Items => " j/k: navigate  Enter: activate/menu  m: open menu  q: quit",
@@ -410,12 +445,15 @@ impl App {
 // Background tasks
 // ---------------------------------------------------------------------------
 
-async fn subscribe_task(socket_path: PathBuf, tx: mpsc::Sender<Vec<MinimalTrayItem>>) {
+async fn subscribe_task(socket_path: PathBuf, tx: mpsc::Sender<Update>) {
     loop {
         match run_subscribe(&socket_path, &tx).await {
             Ok(()) => break,
             Err(e) => {
-                tracing::warn!(%e, "subscribe disconnected, retrying in 1s");
+                tracing::debug!(%e, "subscribe disconnected, retrying in 1s");
+                if tx.send(Update::Disconnected(e.to_string())).await.is_err() {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 if tx.is_closed() {
                     break;
@@ -425,16 +463,13 @@ async fn subscribe_task(socket_path: PathBuf, tx: mpsc::Sender<Vec<MinimalTrayIt
     }
 }
 
-async fn run_subscribe(
-    socket_path: &Path,
-    tx: &mpsc::Sender<Vec<MinimalTrayItem>>,
-) -> Result<(), TuiError> {
+async fn run_subscribe(socket_path: &Path, tx: &mpsc::Sender<Update>) -> Result<(), TuiError> {
     let mut client = IpcClient::connect(socket_path).await?;
     client.send_subscribe().await?;
     loop {
         match client.recv_event().await? {
             TrayEvent::Update(items) => {
-                if tx.send(items).await.is_err() {
+                if tx.send(Update::Items(items)).await.is_err() {
                     return Ok(());
                 }
             }
