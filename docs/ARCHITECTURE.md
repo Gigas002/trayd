@@ -292,6 +292,7 @@ When splitting a workspace into library and binary crates:
 - Library crates must not depend on `clap`, UI frameworks, or subscriber initialization.
 - Binary `app/` and `ui/` modules must not re-parse CLI or re-read config files.
 - Tests in library crates must not require a running binary unless marked `#[ignore]` with a documented manual checklist.
+- Tests that need D-Bus start their own private `dbus-daemon` (see `libtrayd/tests/common`) and never use the desktop session bus, where they would compete with the user's tray for `org.kde.StatusNotifierWatcher`. They skip when `dbus-daemon` is missing; CI installs it.
 
 ---
 
