@@ -102,16 +102,6 @@ fn host_state_multiple_items() {
     assert_eq!(state.items.len(), 3);
 }
 
-/// Live D-Bus tests — skipped in CI, run manually:
-///   cargo test --package libtrayd -- host::tests::live --ignored
-#[tokio::test]
-#[ignore]
-async fn live_tray_host_start() {
-    let host = TrayHost::start().await.expect("TrayHost::start failed");
-    let items = host.items().await;
-    println!("registered items: {items:?}");
-}
-
 // ─── menu_nodes_from_av / prop helpers ───────────────────────────────────────
 
 #[test]
@@ -152,25 +142,6 @@ fn get_bool_prop_with_true() {
         .expect("OwnedVariant from bool");
     props.insert("enabled".to_owned(), ov);
     assert_eq!(get_bool_prop(&props, "enabled"), Some(true));
-}
-
-/// Live D-Bus test for get_menu — skipped in CI.
-#[tokio::test]
-#[ignore = "requires D-Bus session bus with a registered tray item that has a menu"]
-async fn live_get_menu_top_level() {
-    let host = TrayHost::start().await.expect("TrayHost::start failed");
-    let items = host.items().await;
-    let item = items
-        .iter()
-        .find(|i| !i.menu_path.is_empty() && i.menu_path != "/")
-        .expect("no item with a menu found");
-    println!("testing menu for: {}", item.id);
-    let nodes = host
-        .get_menu(&item.id, None)
-        .await
-        .expect("get_menu failed");
-    println!("menu nodes: {nodes:#?}");
-    assert!(!nodes.is_empty(), "expected at least one menu item");
 }
 
 // ─── Pixmap cache ────────────────────────────────────────────────────────────────

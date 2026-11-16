@@ -107,13 +107,30 @@ impl TrayHost {
     /// Returns `Err(TraydError::DBus(_))` if the session bus is unreachable or
     /// the watcher name is already taken by another process.
     pub async fn start() -> Result<Self, TraydError> {
+        Self::start_with(zbus::connection::Builder::session()).await
+    }
+
+    /// Like [`TrayHost::start`], but on the bus at `address` (a D-Bus address
+    /// such as `unix:path=/run/user/1000/bus`) instead of the session bus.
+    ///
+    /// Useful for nested sessions and for tests that run a private bus.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`TrayHost::start`], plus `Err(TraydError::DBus(_))` if
+    /// `address` is not a valid D-Bus address.
+    pub async fn start_on(address: &str) -> Result<Self, TraydError> {
+        Self::start_with(zbus::connection::Builder::address(address)).await
+    }
+
+    async fn start_with(builder: zbus::connection::Builder<'_>) -> Result<Self, TraydError> {
         // Internal channel: watcher D-Bus object → host background loop.
         let (watcher_tx, watcher_rx) = mpsc::channel::<WatcherMsg>(32);
         let (watcher, watcher_inner) = StatusNotifierWatcher::new(watcher_tx);
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
-        let conn = zbus::connection::Builder::session()
+        let conn = builder
             .serve_at(SNI_WATCHER_PATH, watcher)
             .name(SNI_WATCHER_NAME)
             .build()

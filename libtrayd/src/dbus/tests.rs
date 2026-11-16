@@ -1,7 +1,6 @@
 //! D-Bus layer compile-time tests.
 //!
-//! Live bus tests are `#[ignore]`d and intended for manual runs:
-//!   cargo test --package libtrayd -- dbus::tests:: --ignored
+//! Live bus behaviour is covered by `libtrayd/tests/live.rs` (private bus).
 
 use super::watcher::parse_service;
 
