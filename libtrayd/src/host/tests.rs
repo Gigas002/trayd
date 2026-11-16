@@ -285,3 +285,17 @@ fn items_keep_registration_order() {
     state.insert_item(dummy_item("a"));
     assert_eq!(ids(&state), ["c", "b", "a"]);
 }
+
+#[test]
+fn pixmaps_from_dbus_keeps_only_consistent_pixmaps() {
+    let kept = pixmaps_from_dbus(vec![
+        (1, 1, vec![0; 4]),
+        (i32::MAX, i32::MAX, vec![0; 4]),
+        (-1, -1, vec![0; 4]),
+        (2, 1, vec![0; 4]),
+        (0, 5, Vec::new()),
+        (2, 3, vec![0; 24]),
+    ]);
+    let dims: Vec<_> = kept.iter().map(|p| (p.width, p.height)).collect();
+    assert_eq!(dims, [(1, 1), (2, 3)]);
+}

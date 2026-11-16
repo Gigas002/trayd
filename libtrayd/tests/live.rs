@@ -249,3 +249,37 @@ async fn items_are_listed_in_registration_order() {
         .collect();
     assert_eq!(ids, names);
 }
+
+#[tokio::test]
+async fn malformed_pixmaps_are_never_served() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let good = (2, 2, vec![0xffu8; 2 * 2 * 4]);
+    let app = FakeApp::new(
+        &bus,
+        FakeState {
+            pixmaps: vec![
+                (i32::MIN, -5, vec![0; 4]),         // hostile dimensions
+                (22, 22, vec![0; 10]),              // too little data
+                (0, 0, Vec::new()),                 // empty
+                (64, 64, vec![0; 64 * 64 * 4 + 1]), // too much data
+                good.clone(),
+            ],
+            ..FakeState::default()
+        },
+    )
+    .await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    for size in [1, 22, 64, u16::MAX] {
+        let px = host.get_pixmap(&id, size).await.unwrap();
+        assert_eq!(
+            (px.width, px.height, px.data),
+            (2, 2, good.2.clone()),
+            "size {size}"
+        );
+    }
+}

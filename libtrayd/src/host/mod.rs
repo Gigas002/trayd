@@ -268,16 +268,18 @@ impl TrayHost {
                 return Err(TraydError::NotFound(format!("no pixmap for {id}")));
             }
 
-            // Pick the nearest size; prefer an exact match, then larger, then smaller.
+            // Pick the nearest width; on a tie prefer the larger pixmap, which
+            // scales down better than a small one scales up.
             let best = icon
                 .pixmaps
                 .iter()
-                .min_by_key(|p| (p.width - size as i32).unsigned_abs())
+                .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))
                 .expect("pixmaps is non-empty");
 
+            // `pixmaps_from_dbus` guarantees positive dimensions.
             PixmapData {
-                width: best.width as u32,
-                height: best.height as u32,
+                width: best.width.unsigned_abs(),
+                height: best.height.unsigned_abs(),
                 data: best.data.clone(),
             }
         };
@@ -502,6 +504,28 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
         is_submenu,
         children,
     })
+}
+
+/// Convert pixmaps as received over D-Bus, dropping malformed ones.
+///
+/// Apps control these values: a pixmap is kept only when both sides are
+/// positive and the data holds exactly `width × height` ARGB32 pixels, so
+/// consumers can trust the dimensions they are given.
+pub(crate) fn pixmaps_from_dbus(raw: Vec<(i32, i32, Vec<u8>)>) -> Vec<IconPixmap> {
+    raw.into_iter()
+        .filter(|(w, h, data)| {
+            let expected = usize::try_from(*w)
+                .ok()
+                .zip(usize::try_from(*h).ok())
+                .and_then(|(w, h)| w.checked_mul(h)?.checked_mul(4));
+            *w > 0 && *h > 0 && expected == Some(data.len())
+        })
+        .map(|(width, height, data)| IconPixmap {
+            width,
+            height,
+            data,
+        })
+        .collect()
 }
 
 pub(crate) fn get_str_prop(props: &HashMap<String, OwnedVariant>, key: &str) -> String {
@@ -832,39 +856,17 @@ async fn fetch_item_properties(
 
     let tool_tip = ToolTip {
         icon_name: raw_tool_tip.0,
-        icon_pixmaps: raw_tool_tip
-            .1
-            .into_iter()
-            .map(|(w, h, data)| IconPixmap {
-                width: w,
-                height: h,
-                data,
-            })
-            .collect(),
+        icon_pixmaps: pixmaps_from_dbus(raw_tool_tip.1),
         title: raw_tool_tip.2,
         description: raw_tool_tip.3,
     };
 
     let overlay_icon = IconData {
         name: overlay_icon_name,
-        pixmaps: raw_overlay_pixmaps
-            .into_iter()
-            .map(|(w, h, data)| IconPixmap {
-                width: w,
-                height: h,
-                data,
-            })
-            .collect(),
+        pixmaps: pixmaps_from_dbus(raw_overlay_pixmaps),
     };
 
-    let pixmaps = raw_pixmaps
-        .into_iter()
-        .map(|(w, h, data)| IconPixmap {
-            width: w,
-            height: h,
-            data,
-        })
-        .collect();
+    let pixmaps = pixmaps_from_dbus(raw_pixmaps);
 
     TrayItem {
         id: ItemId(service_id.to_owned()),
@@ -882,14 +884,7 @@ async fn fetch_item_properties(
         },
         attention_icon: IconData {
             name: attention_icon_name,
-            pixmaps: raw_attention_pixmaps
-                .into_iter()
-                .map(|(w, h, data)| IconPixmap {
-                    width: w,
-                    height: h,
-                    data,
-                })
-                .collect(),
+            pixmaps: pixmaps_from_dbus(raw_attention_pixmaps),
         },
         menu_path,
     }
@@ -1054,14 +1049,7 @@ async fn on_icon_changed(
     };
     let new_icon = IconData {
         name: icon_name,
-        pixmaps: raw
-            .into_iter()
-            .map(|(w, h, d)| IconPixmap {
-                width: w,
-                height: h,
-                data: d,
-            })
-            .collect(),
+        pixmaps: pixmaps_from_dbus(raw),
     };
 
     let event = {
@@ -1146,15 +1134,7 @@ async fn on_tool_tip_changed(
     });
     let new_tip = ToolTip {
         icon_name: raw.0,
-        icon_pixmaps: raw
-            .1
-            .into_iter()
-            .map(|(w, h, data)| IconPixmap {
-                width: w,
-                height: h,
-                data,
-            })
-            .collect(),
+        icon_pixmaps: pixmaps_from_dbus(raw.1),
         title: raw.2,
         description: raw.3,
     };
@@ -1188,14 +1168,7 @@ async fn on_overlay_icon_changed(
     });
     let new_overlay = IconData {
         name: icon_name,
-        pixmaps: raw
-            .into_iter()
-            .map(|(w, h, d)| IconPixmap {
-                width: w,
-                height: h,
-                data: d,
-            })
-            .collect(),
+        pixmaps: pixmaps_from_dbus(raw),
     };
 
     let event = {
