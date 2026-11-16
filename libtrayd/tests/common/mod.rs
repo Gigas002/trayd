@@ -425,3 +425,23 @@ pub async fn wait_app(app: &FakeApp, what: &str, cond: impl Fn(&FakeState) -> bo
     }
     panic!("timed out waiting for: {what}");
 }
+
+/// The watcher's `RegisteredStatusNotifierItems` property.
+pub async fn registered_items(bus: &TestBus) -> Vec<String> {
+    let conn = bus.connect().await;
+    let reply = conn
+        .call_method(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(
+                "org.kde.StatusNotifierWatcher",
+                "RegisteredStatusNotifierItems",
+            ),
+        )
+        .await
+        .unwrap();
+    let v: OwnedVariant = reply.body().deserialize().unwrap();
+    Vec::<String>::try_from(v).unwrap()
+}

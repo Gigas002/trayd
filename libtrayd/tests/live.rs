@@ -134,3 +134,26 @@ async fn every_change_signal_refreshes_the_item() {
         wait_for(&host, &icon, |i| i[0].icon.name == icon).await;
     }
 }
+
+#[tokio::test]
+async fn registrations_without_a_live_owner_are_rejected() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+
+    for bogus in [
+        "org.example.Nobody",
+        "",
+        "not a bus name",
+        "org.example.X/bad path",
+    ] {
+        assert!(
+            app.register(bogus).await.is_err(),
+            "{bogus:?} must be rejected"
+        );
+    }
+    // A real registration afterwards still works and is the only entry.
+    app.register_as("org.example.Fake").await;
+    wait_for(&host, "real item listed", |i| i.len() == 1).await;
+    assert_eq!(common::registered_items(&bus).await, ["org.example.Fake"]);
+}
