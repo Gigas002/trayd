@@ -21,8 +21,37 @@ use crate::ipc::{IpcClient, MenuItem, MinimalTrayItem, TrayEvent};
 pub struct MenuLevel {
     #[allow(dead_code)]
     pub submenu_id: Option<u32>,
+    /// Label of the submenu row that opened this level (`None` at the top).
+    pub label: Option<String>,
     pub items: Vec<MenuItem>,
     pub cursor: usize,
+}
+
+impl MenuLevel {
+    fn new(submenu_id: Option<u32>, label: Option<String>, items: Vec<MenuItem>) -> Self {
+        let cursor = items.iter().position(|i| !i.separator).unwrap_or(0);
+        Self {
+            submenu_id,
+            label,
+            items,
+            cursor,
+        }
+    }
+
+    /// Move to the next non-separator row in direction `step` (±1), if any.
+    fn step(&mut self, step: isize) {
+        let mut at = self.cursor;
+        loop {
+            match at.checked_add_signed(step) {
+                Some(next) if next < self.items.len() => at = next,
+                _ => return,
+            }
+            if !self.items[at].separator {
+                self.cursor = at;
+                return;
+            }
+        }
+    }
 }
 
 pub enum View {
@@ -45,9 +74,18 @@ pub enum Update {
 #[derive(Debug)]
 enum Action {
     OpenMenu(String),
-    OpenSubmenu { app_id: String, item_id: u32 },
+    OpenSubmenu {
+        app_id: String,
+        item_id: u32,
+        label: String,
+    },
     PrimaryActivate(String),
-    Activate { app_id: String, item_id: u32 },
+    Activate {
+        app_id: String,
+        item_id: u32,
+    },
+    /// A greyed-out row: say so instead of activating it.
+    Disabled(String),
     Nothing,
 }
 
@@ -216,10 +254,15 @@ impl App {
                     Some(i) => i,
                     None => return Action::Nothing,
                 };
-                if item.is_submenu {
+                if item.separator {
+                    Action::Nothing
+                } else if !item.enabled {
+                    Action::Disabled(item.label.clone())
+                } else if item.is_submenu {
                     Action::OpenSubmenu {
                         app_id: app_id.clone(),
                         item_id: item.item_id,
+                        label: item.label.clone(),
                     }
                 } else {
                     Action::Activate {
@@ -239,6 +282,9 @@ impl App {
     async fn execute_action(&mut self, action: Action) -> Result<(), TuiError> {
         match action {
             Action::Nothing => {}
+            Action::Disabled(label) => {
+                self.status_msg = Some(format!("\"{label}\" is disabled"));
+            }
             Action::PrimaryActivate(app_id) => {
                 let mut client = IpcClient::connect(&self.socket_path).await?;
                 client.activate(&app_id, 0).await?;
@@ -248,22 +294,18 @@ impl App {
                 let items = client.get_menu(&app_id, None).await?;
                 self.view = View::Menu {
                     app_id,
-                    stack: vec![MenuLevel {
-                        submenu_id: None,
-                        items,
-                        cursor: 0,
-                    }],
+                    stack: vec![MenuLevel::new(None, None, items)],
                 };
             }
-            Action::OpenSubmenu { app_id, item_id } => {
+            Action::OpenSubmenu {
+                app_id,
+                item_id,
+                label,
+            } => {
                 let mut client = IpcClient::connect(&self.socket_path).await?;
                 let items = client.get_menu(&app_id, Some(item_id)).await?;
                 if let View::Menu { stack, .. } = &mut self.view {
-                    stack.push(MenuLevel {
-                        submenu_id: Some(item_id),
-                        items,
-                        cursor: 0,
-                    });
+                    stack.push(MenuLevel::new(Some(item_id), Some(label), items));
                 }
             }
             Action::Activate { app_id, item_id } => {
@@ -282,7 +324,7 @@ impl App {
             }
             View::Menu { stack, .. } => {
                 if let Some(level) = stack.last_mut() {
-                    level.cursor = level.cursor.saturating_sub(1);
+                    level.step(-1);
                 }
             }
         }
@@ -296,10 +338,8 @@ impl App {
                 }
             }
             View::Menu { stack, .. } => {
-                if let Some(level) = stack.last_mut()
-                    && level.cursor + 1 < level.items.len()
-                {
-                    level.cursor += 1;
+                if let Some(level) = stack.last_mut() {
+                    level.step(1);
                 }
             }
         }
@@ -383,23 +423,41 @@ impl App {
             None => return,
         };
 
-        let title = if stack.len() == 1 {
-            format!(" {app_id} ")
-        } else {
-            format!(" {app_id} > (submenu) ")
-        };
+        // "Title › Submenu › Inner", named like the items list names the item.
+        let name = self
+            .tray_items
+            .iter()
+            .find(|i| &i.app_id == app_id)
+            .and_then(|i| i.title.as_deref())
+            .unwrap_or(app_id);
+        let mut title = format!(" {name}");
+        for label in stack.iter().filter_map(|l| l.label.as_deref()) {
+            title.push_str(" › ");
+            title.push_str(label);
+        }
+        title.push(' ');
 
+        let width = usize::from(area.width.saturating_sub(4));
         let list_items: Vec<ListItem> = level
             .items
             .iter()
             .map(|item| {
-                let label = if item.label.is_empty() {
-                    "—"
-                } else {
-                    item.label.as_str()
+                if item.separator {
+                    return ListItem::new("─".repeat(width))
+                        .style(Style::default().fg(Color::DarkGray));
+                }
+                let check = match item.checked {
+                    Some(true) => "[x] ",
+                    Some(false) => "[ ] ",
+                    None => "",
                 };
                 let suffix = if item.is_submenu { " ▶" } else { "" };
-                ListItem::new(format!("{label}{suffix}"))
+                let row = ListItem::new(format!("{check}{}{suffix}", item.label));
+                if item.enabled {
+                    row
+                } else {
+                    row.style(Style::default().fg(Color::DarkGray))
+                }
             })
             .collect();
 

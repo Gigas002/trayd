@@ -20,6 +20,9 @@ fn make_menu_item(id: u32, label: &str, is_submenu: bool) -> MenuItem {
         item_id: id,
         label: label.to_owned(),
         is_submenu,
+        enabled: true,
+        separator: false,
+        checked: None,
     }
 }
 
@@ -86,6 +89,7 @@ fn go_back_from_single_menu_level_returns_to_items() {
         app_id: "org.nm".to_owned(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![],
             cursor: 0,
         }],
@@ -102,11 +106,13 @@ fn go_back_from_two_menu_levels_pops_one() {
         stack: vec![
             MenuLevel {
                 submenu_id: None,
+                label: None,
                 items: vec![],
                 cursor: 0,
             },
             MenuLevel {
                 submenu_id: Some(1),
+                label: None,
                 items: vec![],
                 cursor: 0,
             },
@@ -130,6 +136,7 @@ fn move_down_in_menu_advances_cursor() {
         app_id: "org.nm".to_owned(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![make_menu_item(1, "A", false), make_menu_item(2, "B", false)],
             cursor: 0,
         }],
@@ -148,6 +155,7 @@ fn move_down_in_menu_clamps_at_last() {
         app_id: "org.nm".to_owned(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![make_menu_item(1, "A", false)],
             cursor: 0,
         }],
@@ -166,6 +174,7 @@ fn move_up_in_menu_decrements_cursor() {
         app_id: "org.nm".to_owned(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![make_menu_item(1, "A", false), make_menu_item(2, "B", false)],
             cursor: 1,
         }],
@@ -216,6 +225,7 @@ fn compute_action_activate_for_leaf_menu_item() {
         app_id: "org.nm".to_owned(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![make_menu_item(5, "Enable", false)],
             cursor: 0,
         }],
@@ -236,12 +246,15 @@ fn compute_action_open_submenu_for_submenu_item() {
         app_id: "org.nm".to_owned(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![make_menu_item(3, "Wi-Fi", true)],
             cursor: 0,
         }],
     };
     match app.compute_action() {
-        super::Action::OpenSubmenu { app_id, item_id } => {
+        super::Action::OpenSubmenu {
+            app_id, item_id, ..
+        } => {
             assert_eq!(app_id, "org.nm");
             assert_eq!(item_id, 3);
         }
@@ -286,6 +299,7 @@ fn open_menu_closes_when_its_item_leaves() {
         app_id: "a".into(),
         stack: vec![MenuLevel {
             submenu_id: None,
+            label: None,
             items: vec![make_menu_item(1, "Quit", false)],
             cursor: 0,
         }],
@@ -315,4 +329,81 @@ fn render(app: &App) -> String {
         .chunks(buffer.area.width as usize)
         .map(|row| row.iter().map(|c| c.symbol()).collect::<String>() + "\n")
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Menu rows: separators, disabled rows, toggles, title
+// ---------------------------------------------------------------------------
+
+fn menu_app(items: Vec<MenuItem>) -> App {
+    let mut app = items_app(vec![MinimalTrayItem {
+        title: Some("Network".into()),
+        ..make_tray_item("org.nm")
+    }]);
+    app.view = View::Menu {
+        app_id: "org.nm".into(),
+        stack: vec![MenuLevel::new(None, None, items)],
+    };
+    app
+}
+
+fn separator(id: u32) -> MenuItem {
+    MenuItem {
+        separator: true,
+        ..make_menu_item(id, "", false)
+    }
+}
+
+fn cursor(app: &App) -> usize {
+    match &app.view {
+        View::Menu { stack, .. } => stack.last().unwrap().cursor,
+        View::Items => panic!("not in a menu"),
+    }
+}
+
+#[test]
+fn cursor_skips_separators() {
+    let mut app = menu_app(vec![
+        separator(1),
+        make_menu_item(2, "Open", false),
+        separator(3),
+        make_menu_item(4, "Quit", false),
+        separator(5),
+    ]);
+    assert_eq!(cursor(&app), 1, "starts on the first real row");
+    app.move_down();
+    assert_eq!(cursor(&app), 3);
+    app.move_down();
+    assert_eq!(cursor(&app), 3, "no real row below");
+    app.move_up();
+    assert_eq!(cursor(&app), 1);
+    app.move_up();
+    assert_eq!(cursor(&app), 1, "no real row above");
+}
+
+#[test]
+fn disabled_rows_are_not_activated() {
+    let app = menu_app(vec![MenuItem {
+        enabled: false,
+        ..make_menu_item(7, "Connect", false)
+    }]);
+    assert!(matches!(app.compute_action(), super::Action::Disabled(ref l) if l == "Connect"));
+}
+
+#[test]
+fn menu_shows_title_toggles_and_separators() {
+    let app = menu_app(vec![
+        MenuItem {
+            checked: Some(true),
+            ..make_menu_item(1, "Wi-Fi", false)
+        },
+        separator(2),
+        make_menu_item(3, "VPN", true),
+    ]);
+    let screen = render(&app);
+    assert!(screen.contains("Network"), "{screen}");
+    assert!(!screen.contains("org.nm"), "{screen}");
+    assert!(screen.contains("[x] Wi-Fi"), "{screen}");
+    assert!(screen.contains("───"), "{screen}");
+    assert!(screen.contains("VPN ▶"), "{screen}");
 }
