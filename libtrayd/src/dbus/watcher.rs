@@ -204,3 +204,12 @@ pub fn parse_service(sender: &str, service: &str) -> (String, String) {
         (service.to_owned(), "/StatusNotifierItem".to_owned())
     }
 }
+
+/// `true` when the registered service id `service_id` (as stored in
+/// `RegisteredStatusNotifierItems`) belongs to the bus name `bus_name`.
+///
+/// Ids are `busname` or `busname/object/path`; a plain prefix test would
+/// also match `:1.20` for `:1.2` and `org.example.App2` for `org.example.App`.
+pub fn service_belongs_to(service_id: &str, bus_name: &str) -> bool {
+    service_id.split('/').next() == Some(bus_name)
+}

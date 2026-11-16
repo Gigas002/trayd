@@ -2,7 +2,7 @@
 //!
 //! Live bus behaviour is covered by `libtrayd/tests/live.rs` (private bus).
 
-use super::watcher::parse_service;
+use super::watcher::{parse_service, service_belongs_to};
 
 #[test]
 fn parse_service_plain_bus_name() {
@@ -33,4 +33,10 @@ fn parse_service_unique_name_with_path() {
 }
 
 #[test]
-fn dbus_module_compiles() {}
+fn service_belongs_to_matches_whole_bus_names_only() {
+    assert!(service_belongs_to("org.example.App", "org.example.App"));
+    assert!(service_belongs_to(":1.2/StatusNotifierItem", ":1.2"));
+    assert!(!service_belongs_to(":1.20/StatusNotifierItem", ":1.2"));
+    assert!(!service_belongs_to("org.example.App2", "org.example.App"));
+    assert!(!service_belongs_to("org.example.App", "org.example.App2"));
+}

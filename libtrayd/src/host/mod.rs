@@ -23,7 +23,7 @@ use zbus::{ObjectPath, OwnedVariant, object_server::SignalEmitter};
 
 use crate::{
     TraydError,
-    dbus::watcher::SharedWatcherInner,
+    dbus::watcher::{SharedWatcherInner, service_belongs_to},
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
     model::{
         HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
@@ -625,8 +625,9 @@ async fn handle_name_owner_changed(inner: &Arc<TrayHostInner>, sig: zbus::fdo::N
     let removed_services: Vec<String> = {
         let mut watcher = inner.watcher_inner.lock().await;
         let drained = std::mem::take(&mut watcher.items);
-        let (removed, kept): (Vec<String>, Vec<String>) =
-            drained.into_iter().partition(|svc| svc.starts_with(&gone));
+        let (removed, kept): (Vec<String>, Vec<String>) = drained
+            .into_iter()
+            .partition(|svc| service_belongs_to(svc, &gone));
         watcher.items = kept;
         removed
     };

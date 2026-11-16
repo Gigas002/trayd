@@ -157,3 +157,21 @@ async fn registrations_without_a_live_owner_are_rejected() {
     wait_for(&host, "real item listed", |i| i.len() == 1).await;
     assert_eq!(common::registered_items(&bus).await, ["org.example.Fake"]);
 }
+
+#[tokio::test]
+async fn removing_an_app_keeps_apps_whose_name_extends_it() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let short = FakeApp::new(&bus, FakeState::default()).await;
+    short.register_as("org.example.P").await;
+    let long = FakeApp::new(&bus, FakeState::default()).await;
+    long.register_as("org.example.P2").await;
+    wait_for(&host, "both listed", |i| i.len() == 2).await;
+
+    drop(short);
+    wait_for(&host, "only P2 left", |i| {
+        i.len() == 1 && i[0].id.to_string() == "org.example.P2"
+    })
+    .await;
+    assert_eq!(common::registered_items(&bus).await, ["org.example.P2"]);
+}
