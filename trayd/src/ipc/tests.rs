@@ -227,6 +227,9 @@ async fn golden_menu_response_fixture() {
                 assert_eq!(items[0].label, "Action");
                 assert!(!items[0].is_submenu);
                 assert!(items[1].is_submenu);
+                // Fields added later default to a plain, enabled row.
+                assert!(items[0].enabled && !items[0].separator);
+                assert_eq!(items[0].checked, None);
             }
             other => panic!("expected Menu payload, got: {other:?}"),
         },
@@ -414,4 +417,39 @@ async fn socket_is_private_to_the_user() {
     };
     let mode = std::fs::metadata(&srv.path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn menu_rows_carry_state_and_plain_rows_keep_their_old_shape() {
+    use super::server::to_menu_item;
+    let node = |id, label: &str| libtrayd::MenuNode {
+        id,
+        label: label.into(),
+        enabled: true,
+        visible: true,
+        icon_name: String::new(),
+        is_submenu: false,
+        is_separator: false,
+        toggle_state: None,
+        children: Vec::new(),
+    };
+    let json = |n| serde_json::to_string(&to_menu_item(n)).unwrap();
+
+    assert_eq!(
+        json(node(1, "Open")),
+        r#"{"item_id":1,"label":"Open","is_submenu":false}"#
+    );
+    let mut separator = node(2, "");
+    separator.is_separator = true;
+    assert_eq!(
+        json(separator),
+        r#"{"item_id":2,"label":"","is_submenu":false,"separator":true}"#
+    );
+    let mut disabled_toggle = node(3, "Mute");
+    disabled_toggle.enabled = false;
+    disabled_toggle.toggle_state = Some(true);
+    assert_eq!(
+        json(disabled_toggle),
+        r#"{"item_id":3,"label":"Mute","is_submenu":false,"enabled":false,"checked":true}"#
+    );
 }

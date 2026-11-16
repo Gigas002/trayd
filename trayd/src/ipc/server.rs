@@ -126,11 +126,7 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
                     let items = nodes
                         .into_iter()
                         .filter(|n| n.visible)
-                        .map(|n| MenuItem {
-                            item_id: n.id as u32,
-                            label: n.label,
-                            is_submenu: n.is_submenu,
-                        })
+                        .map(to_menu_item)
                         .collect();
                     IpcResponse::ok(OkPayload::Menu { app_id, items })
                 }
@@ -242,6 +238,18 @@ async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost)
         if codec::write_response(write, &resp).await.is_err() {
             return;
         }
+    }
+}
+
+pub(crate) fn to_menu_item(node: libtrayd::MenuNode) -> MenuItem {
+    MenuItem {
+        // DBusMenu ids are i32; the cast round-trips through `activate`.
+        item_id: node.id as u32,
+        label: node.label,
+        is_submenu: node.is_submenu,
+        enabled: node.enabled,
+        separator: node.is_separator,
+        checked: node.toggle_state,
     }
 }
 
