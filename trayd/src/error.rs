@@ -17,6 +17,9 @@ pub enum TraydBinError {
     #[error("daemon already running")]
     AlreadyRunning,
 
+    #[error("another tray already owns org.kde.StatusNotifierWatcher on this bus; stop it first")]
+    WatcherTaken,
+
     #[error("daemon not reachable at {0}")]
     DaemonUnreachable(String),
 

@@ -92,3 +92,25 @@ async fn unknown_item_is_not_found() {
         Err(libtrayd::TraydError::NotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn second_host_does_not_take_over_the_watcher() {
+    let bus = test_bus!();
+    let first = bus.host().await;
+
+    let second = libtrayd::TrayHost::start_on(&bus.address).await;
+    assert!(
+        matches!(&second, Err(e) if e.is_watcher_taken()),
+        "second host must fail, got {:?}",
+        second.as_ref().map(|_| "a running host")
+    );
+    drop(second);
+
+    // The first host still owns the name: a new app reaches it.
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    wait_for(&first, "first host still gets registrations", |i| {
+        i.len() == 1
+    })
+    .await;
+}

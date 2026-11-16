@@ -104,8 +104,9 @@ impl TrayHost {
     ///
     /// # Errors
     ///
-    /// Returns `Err(TraydError::DBus(_))` if the session bus is unreachable or
-    /// the watcher name is already taken by another process.
+    /// Returns `Err(TraydError::DBus(_))` if the session bus is unreachable, and
+    /// `Err(TraydError::DBus(zbus::Error::NameTaken))` if another process
+    /// already owns the watcher name (another tray is running).
     pub async fn start() -> Result<Self, TraydError> {
         Self::start_with(zbus::connection::Builder::session()).await
     }
@@ -130,9 +131,15 @@ impl TrayHost {
 
         // Register the object and claim the name atomically via Builder so no
         // method calls arrive before the interface is ready.
+        //
+        // Never replace a running watcher (zbus does by default), and never
+        // let one replace us: a second instance would silently take every
+        // new registration and, on exit, leave the name with no owner at all.
         let conn = builder
             .serve_at(SNI_WATCHER_PATH, watcher)
             .name(SNI_WATCHER_NAME)
+            .replace_existing_names(false)
+            .allow_name_replacements(false)
             .build()
             .await?;
         info!("claimed D-Bus name {SNI_WATCHER_NAME}; watcher at {SNI_WATCHER_PATH}");

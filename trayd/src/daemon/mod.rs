@@ -8,7 +8,13 @@ pub async fn run(config: &Config) -> Result<(), TraydBinError> {
         return Err(TraydBinError::AlreadyRunning);
     }
 
-    let host = TrayHost::start().await?;
+    let host = TrayHost::start().await.map_err(|e| {
+        if e.is_watcher_taken() {
+            TraydBinError::WatcherTaken
+        } else {
+            e.into()
+        }
+    })?;
     let server = IpcServer::new(&config.socket_path, host);
     server.run().await
 }
