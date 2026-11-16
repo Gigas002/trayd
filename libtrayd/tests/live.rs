@@ -283,3 +283,30 @@ async fn malformed_pixmaps_are_never_served() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_burst_of_change_signals_neither_freezes_nor_floods_the_host() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    // Path-only registration: the case where the host also looks for a
+    // well-known name of the same process.
+    app.register("/StatusNotifierItem").await.unwrap();
+    wait_for(&host, "item listed", |i| i.len() == 1).await;
+    let reads_before = app.property_reads();
+
+    app.flood_new_icon("final-icon", 500).await;
+
+    // The host still serves other apps during and after the burst...
+    let other = FakeApp::new(&bus, FakeState::default()).await;
+    other.register_as("org.example.Other").await;
+    wait_for(&host, "other app listed after the burst", |i| i.len() == 2).await;
+    // ...ends up with the final icon...
+    wait_for(&host, "final icon", |i| {
+        i.iter().any(|it| it.icon.name == "final-icon")
+    })
+    .await;
+    // ...and coalesced the burst instead of re-reading per signal.
+    let reads = app.property_reads() - reads_before;
+    assert!(reads < 100, "500 signals caused {reads} property reads");
+}

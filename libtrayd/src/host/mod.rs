@@ -407,18 +407,18 @@ async fn lookup_well_known_name(conn: &zbus::Connection, unique_name: &str) -> O
     None
 }
 
-async fn build_proxy<'c>(
-    conn: &'c zbus::Connection,
-    bus_name: &'c str,
-    object_path: &'c str,
-) -> Result<StatusNotifierItemProxy<'c>, TraydError> {
+async fn build_proxy(
+    conn: &zbus::Connection,
+    bus_name: &str,
+    object_path: &str,
+) -> Result<StatusNotifierItemProxy<'static>, TraydError> {
     // No property cache: zbus refreshes cached values only on the standard
     // `PropertiesChanged` signal, which SNI apps don't emit.  They announce
     // changes with `NewTitle`/`NewIcon`/… instead, and a cached proxy would
     // keep serving the first value it ever read.
     StatusNotifierItemProxy::builder(conn)
-        .destination(bus_name)
-        .path(object_path)
+        .destination(bus_name.to_owned())
+        .path(object_path.to_owned())
         .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await
@@ -630,6 +630,7 @@ async fn handle_item_registered(
         id.clone(),
         bus_name.to_owned(),
         object_path.to_owned(),
+        well_known,
     ));
     state.set_item_task(id.clone(), handle);
     state.insert_item(item.clone());
@@ -860,17 +861,45 @@ async fn fetch_item_properties(
 
 // ─── Per-item signal watcher ──────────────────────────────────────────────────────────────────────────────────
 
+/// What a burst of change signals asks the refresher to re-read.
+#[derive(Debug, Default)]
+struct Dirty {
+    icon: bool,
+    attention: bool,
+    title: bool,
+    overlay: bool,
+    menu: bool,
+    tool_tip: bool,
+}
+
+/// Aborts the wrapped task when dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Long-running per-item task: subscribes to SNI property-change signals and
-/// keeps the in-process item cache — and derived pixmap cache — fresh.
+/// keeps the in-process item cache fresh.
+///
+/// The signal loop itself never waits on D-Bus: it only records what changed
+/// and wakes a refresher task.  zbus applies backpressure to signal streams,
+/// so a loop that stopped reading while it waited for a property reply would
+/// block the connection's reader, and with it that very reply — a burst of
+/// more than 64 signals froze the whole connection.  Recording also coalesces
+/// bursts into one re-read.
 ///
 /// The task exits naturally when all signal streams close (i.e. the app's bus
-/// name disappears).
+/// name disappears); the refresher is aborted with it.
 async fn run_item_signal_watcher(
     conn: zbus::Connection,
     inner: Arc<TrayHostInner>,
     id: ItemId,
     bus_name: String,
     object_path: String,
+    well_known: Option<String>,
 ) {
     let proxy = match build_proxy(&conn, &bus_name, &object_path).await {
         Ok(p) => p,
@@ -941,35 +970,72 @@ async fn run_item_signal_watcher(
     );
     debug!(%id, "item signal watcher started");
 
+    let dirty = Arc::new(std::sync::Mutex::new(Dirty::default()));
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let _refresher = AbortOnDrop(tokio::spawn(run_item_refresher(
+        Arc::clone(&inner),
+        id.clone(),
+        proxy.clone(),
+        well_known,
+        Arc::clone(&dirty),
+        Arc::clone(&wake),
+    )));
+    let mark = |set: fn(&mut Dirty)| {
+        set(&mut dirty.lock().unwrap_or_else(|e| e.into_inner()));
+        wake.notify_one();
+    };
+
     loop {
         tokio::select! {
-            Some(_) = new_icon.next() => {
-                on_icon_changed(&inner, &id, &proxy, false, &bus_name).await;
-            }
-            Some(_) = new_title.next() => {
-                on_title_changed(&inner, &id, &proxy).await;
-            }
+            Some(_) = new_icon.next() => mark(|d| d.icon = true),
+            Some(_) = new_title.next() => mark(|d| d.title = true),
             Some(sig) = new_status.next() => {
+                // The new status travels in the signal: no D-Bus read needed.
                 if let Ok(args) = sig.args() {
                     on_status_changed(&inner, &id, TrayStatus::from_dbus(args.status())).await;
                 }
             }
-            Some(_) = new_attention.next() => {
-                on_icon_changed(&inner, &id, &proxy, true, &bus_name).await;
-            }
-            Some(_) = new_overlay.next() => {
-                on_overlay_icon_changed(&inner, &id, &proxy).await;
-            }
-            Some(_) = new_menu.next() => {
-                on_menu_path_changed(&inner, &id, &proxy).await;
-            }
-            Some(_) = new_tool_tip.next() => {
-                on_tool_tip_changed(&inner, &id, &proxy).await;
-            }
+            Some(_) = new_attention.next() => mark(|d| d.attention = true),
+            Some(_) = new_overlay.next() => mark(|d| d.overlay = true),
+            Some(_) = new_menu.next() => mark(|d| d.menu = true),
+            Some(_) = new_tool_tip.next() => mark(|d| d.tool_tip = true),
             else => break,
         }
     }
     debug!(%id, "item signal watcher ended");
+}
+
+/// Re-reads whatever the signal loop marked dirty, one round at a time.
+async fn run_item_refresher(
+    inner: Arc<TrayHostInner>,
+    id: ItemId,
+    proxy: StatusNotifierItemProxy<'static>,
+    well_known: Option<String>,
+    dirty: Arc<std::sync::Mutex<Dirty>>,
+    wake: Arc<tokio::sync::Notify>,
+) {
+    loop {
+        wake.notified().await;
+        let d = std::mem::take(&mut *dirty.lock().unwrap_or_else(|e| e.into_inner()));
+        if d.icon {
+            on_icon_changed(&inner, &id, &proxy, false, well_known.as_deref()).await;
+        }
+        if d.attention {
+            on_icon_changed(&inner, &id, &proxy, true, well_known.as_deref()).await;
+        }
+        if d.title {
+            on_title_changed(&inner, &id, &proxy).await;
+        }
+        if d.overlay {
+            on_overlay_icon_changed(&inner, &id, &proxy).await;
+        }
+        if d.menu {
+            on_menu_path_changed(&inner, &id, &proxy).await;
+        }
+        if d.tool_tip {
+            on_tool_tip_changed(&inner, &id, &proxy).await;
+        }
+    }
 }
 
 /// Re-fetch the normal or attention icon from D-Bus and update the item cache.
@@ -978,7 +1044,7 @@ async fn on_icon_changed(
     id: &ItemId,
     proxy: &StatusNotifierItemProxy<'_>,
     attention: bool,
-    bus_name: &str,
+    well_known: Option<&str>,
 ) {
     let (icon_name, raw) = if attention {
         let name = proxy.attention_icon_name().await.unwrap_or_else(|e| {
@@ -1001,13 +1067,10 @@ async fn on_icon_changed(
             warn!(%e, %id, "failed to fetch id");
             String::new()
         });
-        let resolved = resolve_icon_name(
-            name,
-            lookup_well_known_name(&inner.conn, bus_name)
-                .await
-                .as_deref(),
-            sni_id,
-        );
+        // The well-known name was looked up once at registration; repeating
+        // the lookup (one call per name on the bus) for every animation
+        // frame of an icon cost ~24 round trips per NewIcon.
+        let resolved = resolve_icon_name(name, well_known, sni_id);
         let pixmaps = proxy.icon_pixmap().await.unwrap_or_else(|e| {
             warn!(%e, %id, "failed to fetch icon_pixmap");
             Vec::new()

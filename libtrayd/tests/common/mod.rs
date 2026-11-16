@@ -411,6 +411,19 @@ impl FakeApp {
         FakeItem::new_icon(&emitter).await.unwrap();
     }
 
+    /// Change the icon name, then emit `n` `NewIcon` signals back to back.
+    pub async fn flood_new_icon(&self, final_icon: &str, n: usize) {
+        self.state.lock().unwrap().icon_name = final_icon.to_owned();
+        let emitter = SignalEmitter::new(&self.conn, "/StatusNotifierItem").unwrap();
+        for _ in 0..n {
+            FakeItem::new_icon(&emitter).await.unwrap();
+        }
+    }
+
+    pub fn property_reads(&self) -> usize {
+        self.state.lock().unwrap().property_reads
+    }
+
     pub fn events(&self) -> Vec<(i32, String)> {
         self.state.lock().unwrap().events.clone()
     }
