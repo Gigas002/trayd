@@ -92,6 +92,18 @@ pub struct MenuItem {
     pub item_id: u32,
     pub label: String,
     pub is_submenu: bool,
+    /// `false` for greyed-out rows (absent on the wire when `true`).
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub separator: bool,
+    /// On/off state of check and radio rows.
+    #[serde(default)]
+    pub checked: Option<bool>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

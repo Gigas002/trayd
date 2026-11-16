@@ -27,7 +27,8 @@ pub enum Command {
         /// StatusNotifier app id (wire `app_id`).
         #[arg(long)]
         app_id: String,
-        /// dmenu-compatible command, e.g. `tofi --mode dmenu` or `rofi -dmenu`.
+        /// dmenu-compatible command, run with `sh -c`, e.g. `tofi --mode dmenu` or
+        /// `rofi -dmenu -p 'Tray menu'`.
         #[arg(long, default_value = "tofi --mode dmenu")]
         dmenu_cmd: String,
     },
