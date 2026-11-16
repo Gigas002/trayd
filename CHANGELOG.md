@@ -5,9 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-16
+
 Findings and fixes from the audit in [`docs/AUDIT.md`](docs/AUDIT.md).
 
-**Breaking (`libtrayd`):** `MenuNode` gains public fields, so the next release must be 0.3.0.
+**Breaking (`libtrayd`):** `MenuNode` gains public fields (`is_separator`, `toggle_state`), so code that builds it with a struct literal must set them.
 
 ### Fixed
 

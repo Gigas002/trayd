@@ -7,7 +7,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 keywords = ["tray", "dbus", "zbus"]
 repository = "https://github.com/Gigas002/trayd"
-version = "0.2.0"
+version = "0.3.0"
 
 [workspace.dependencies]
 base64-ng = "2"

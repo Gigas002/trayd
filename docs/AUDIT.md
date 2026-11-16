@@ -133,15 +133,15 @@ Subscribers still get one snapshot per 50 ms window of changes (unchanged).
 
 ## 6. Code quality, tests and project hygiene
 
-| Area       | Finding                                                                                                                                                                                                                                                                  | Status             |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| Live tests | All D-Bus tests were `#[ignore]`d, and running them took the user's watcher name. They now each start a private `dbus-daemon` with a fake app (`libtrayd/tests/common`), run by default, and skip when `dbus-daemon` is missing; CI installs it.                         | Fixed (71b700b)    |
-| Coverage   | 10.6% → 56.8% lines (host 4.7% → 74.7%, IPC server 0% → 51.8%, codec 0% → 95.9%). 108 passing + 9 ignored tests → 146 passing, none ignored.                                                                                                                             | Fixed              |
-| Gates      | fmt, typos, clippy `-D warnings` at three feature levels, tests, docs: all pass on every audit commit (checked one by one, §9). Two commits each failed once under parallel build load and passed on retry; the live tests' 5 s wait limit was raised to 30 s (b3c4c75). | OK                 |
-| Manifests  | Cargo warned about `homepage` repeating `repository` and an unused `workspace.package.description`; both removed.                                                                                                                                                        | Fixed (171af76)    |
-| Publishing | `cargo publish -p libtrayd --dry-run` packages fine; libtrayd 0.2.0 is already on crates.io. The binaries depend on libtrayd by path only, which is fine while only libtrayd is published.                                                                               | OK                 |
-| Semver     | `MenuNode` gained public fields (be04869): the next libtrayd release must be 0.3.0. Other additions (`start_on`, `is_watcher_taken`, IPC fields) are additive.                                                                                                           | Noted in CHANGELOG |
-| Docs       | README, IPC.md, ARCHITECTURE and CHANGELOG updated for every behaviour change.                                                                                                                                                                                           | Fixed (b43b286)    |
+| Area       | Finding                                                                                                                                                                                                                                                                  | Status          |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- |
+| Live tests | All D-Bus tests were `#[ignore]`d, and running them took the user's watcher name. They now each start a private `dbus-daemon` with a fake app (`libtrayd/tests/common`), run by default, and skip when `dbus-daemon` is missing; CI installs it.                         | Fixed (71b700b) |
+| Coverage   | 10.6% → 56.8% lines (host 4.7% → 74.7%, IPC server 0% → 51.8%, codec 0% → 95.9%). 108 passing + 9 ignored tests → 146 passing, none ignored.                                                                                                                             | Fixed           |
+| Gates      | fmt, typos, clippy `-D warnings` at three feature levels, tests, docs: all pass on every audit commit (checked one by one, §9). Two commits each failed once under parallel build load and passed on retry; the live tests' 5 s wait limit was raised to 30 s (b3c4c75). | OK              |
+| Manifests  | Cargo warned about `homepage` repeating `repository` and an unused `workspace.package.description`; both removed.                                                                                                                                                        | Fixed (171af76) |
+| Publishing | `cargo publish -p libtrayd --dry-run` packages fine; libtrayd 0.2.0 is already on crates.io. The binaries depend on libtrayd by path only, which is fine while only libtrayd is published.                                                                               | OK              |
+| Semver     | `MenuNode` gained public fields (be04869): so the crates are bumped to 0.3.0. Other additions (`start_on`, `is_watcher_taken`, IPC fields) are additive.                                                                                                                 | Fixed           |
+| Docs       | README, IPC.md, ARCHITECTURE and CHANGELOG updated for every behaviour change.                                                                                                                                                                                           | Fixed (b43b286) |
 
 ## 7. Features compared with the SNI specification and other hosts
 
@@ -162,8 +162,8 @@ Subscribers still get one snapshot per 50 ms window of changes (unchanged).
 
 ## 8. Left open
 
-- **Release**: libtrayd's `MenuNode` change requires 0.3.0; the CHANGELOG has
-  an Unreleased section ready for it. Versions were not bumped.
+- **Release**: all crates are now 0.3.0 (libtrayd's `MenuNode` change is
+  breaking); set the date in CHANGELOG.md when tagging. Nothing was published.
 - **CI**: the `dbus-daemon` install step and the full `cargo deny check` job
   were not run on GitHub here; watch their first run.
 - **Features** (§7): `IconThemePath`, secondary activation and scroll over
