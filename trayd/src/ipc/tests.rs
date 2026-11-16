@@ -328,3 +328,60 @@ async fn minimal_tray_item_item_is_menu_present_when_true() {
         "overlay_icon_handle must be present; got: {json}"
     );
 }
+
+/// Send raw bytes, then read every reply line until the server closes or
+/// 2 s pass.
+async fn raw_exchange(path: &std::path::Path, bytes: &[u8]) -> Vec<String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let (mut r, mut w) = connect(path).await;
+    // The server may close mid-write on oversized input.
+    let _ = w.write_all(bytes).await;
+    let mut lines = Vec::new();
+    loop {
+        let mut line = String::new();
+        match tokio::time::timeout(Duration::from_secs(2), r.read_line(&mut line)).await {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => return lines,
+            Ok(Ok(_)) => lines.push(line.trim().to_owned()),
+        }
+    }
+}
+
+#[tokio::test]
+async fn bad_requests_get_invalid_request_and_the_connection_stays_open() {
+    let Some(srv) = start_server("badreq").await else {
+        return;
+    };
+    let lines = raw_exchange(
+        &srv.path,
+        b"not json\n{\"v\":1,\"cmd\":\"frobnicate\"}\n{\"v\":2,\"cmd\":\"ping\"}\n{\"v\":1,\"cmd\":\"ping\"}\n",
+    )
+    .await;
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    for line in &lines[..3] {
+        assert!(line.contains("\"INVALID_REQUEST\""), "{line}");
+    }
+    assert_eq!(lines[3], r#"{"v":1,"type":"pong"}"#);
+}
+
+#[tokio::test]
+async fn an_oversized_request_is_refused_without_buffering_it() {
+    let Some(srv) = start_server("huge").await else {
+        return;
+    };
+    let huge = vec![b'a'; 4 << 20]; // 4 MiB, no newline
+    let lines = raw_exchange(&srv.path, &huge).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("\"INVALID_REQUEST\""), "{}", lines[0]);
+}
+
+#[tokio::test]
+async fn codec_rejects_lines_over_the_limit() {
+    let mut ok = vec![b' '; codec::MAX_REQUEST_LEN - 30];
+    ok.extend_from_slice(b"{\"v\":1,\"cmd\":\"ping\"}\n");
+    let mut reader = BufReader::new(&ok[..]);
+    assert!(codec::read_request(&mut reader).await.unwrap().is_some());
+
+    let long = vec![b' '; codec::MAX_REQUEST_LEN + 1];
+    let mut reader = BufReader::new(&long[..]);
+    assert!(codec::read_request(&mut reader).await.is_err());
+}

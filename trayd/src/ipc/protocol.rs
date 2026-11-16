@@ -118,6 +118,9 @@ pub struct IpcError {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
+    /// The line was not a valid request: bad JSON, unknown command, missing
+    /// field, unsupported `v`, or longer than the size limit.
+    InvalidRequest,
     NotFound,
     BusFailed,
     InvalidAppId,

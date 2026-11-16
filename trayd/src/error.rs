@@ -25,4 +25,7 @@ pub enum TraydBinError {
 
     #[error("unexpected IPC response")]
     UnexpectedResponse,
+
+    #[error("request longer than {} bytes", crate::ipc::codec::MAX_REQUEST_LEN)]
+    RequestTooLong,
 }

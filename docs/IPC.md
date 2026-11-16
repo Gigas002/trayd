@@ -54,12 +54,13 @@ Every request is a JSON object on one line:
 {"v":1,"error":{"code":"<CODE>","message":"..."}}
 ```
 
-| `code`            | Meaning                    |
-| ----------------- | -------------------------- |
-| `NOT_FOUND`       | `app_id` not registered    |
-| `BUS_FAILED`      | D-Bus communication failed |
-| `INVALID_APP_ID`  | Malformed `app_id`         |
-| `NOT_IMPLEMENTED` | Feature not yet available  |
+| `code`            | Meaning                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_REQUEST` | Line is not a valid request: bad JSON, unknown `cmd`, missing field, `v` other than `1`, or longer than 64 KiB. The connection stays open, except after an over-long line. |
+| `NOT_FOUND`       | `app_id` not registered                                                                                                                                                    |
+| `BUS_FAILED`      | D-Bus communication failed                                                                                                                                                 |
+| `INVALID_APP_ID`  | Malformed `app_id`                                                                                                                                                         |
+| `NOT_IMPLEMENTED` | Feature not yet available                                                                                                                                                  |
 
 ---
 
