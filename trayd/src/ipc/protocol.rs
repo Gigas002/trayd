@@ -202,6 +202,10 @@ pub struct MinimalTrayItem {
     /// Overlay icon theme name, if set (displayed on top of the normal icon).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay_icon_handle: Option<String>,
+    /// Icon theme directory the app ships its own icons in, if any; icon
+    /// handles may only resolve there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_theme_path: Option<String>,
 }
 
 /// One row in a DBusMenu tree.

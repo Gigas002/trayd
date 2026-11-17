@@ -293,6 +293,7 @@ async fn minimal_tray_item_item_is_menu_omitted_when_false() {
         tooltip_title: None,
         tooltip_description: None,
         overlay_icon_handle: None,
+        icon_theme_path: None,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -318,6 +319,7 @@ async fn minimal_tray_item_item_is_menu_present_when_true() {
         tooltip_title: Some("Menu App Tooltip".into()),
         tooltip_description: Some("A tooltip description".into()),
         overlay_icon_handle: Some("overlay-badge".into()),
+        icon_theme_path: None,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -558,5 +560,24 @@ fn item_method_requests_parse_with_defaults() {
             x: 1,
             y: 2
         }
+    );
+}
+
+#[test]
+fn icon_theme_path_is_sent_only_when_set() {
+    use super::protocol::MinimalTrayItem;
+    let mut item: MinimalTrayItem =
+        serde_json::from_str(r#"{"app_id":"a","status":"Active"}"#).unwrap();
+    assert_eq!(item.icon_theme_path, None);
+    assert!(
+        !serde_json::to_string(&item)
+            .unwrap()
+            .contains("icon_theme_path")
+    );
+    item.icon_theme_path = Some("/opt/app/icons".into());
+    assert!(
+        serde_json::to_string(&item)
+            .unwrap()
+            .contains(r#""icon_theme_path":"/opt/app/icons""#)
     );
 }

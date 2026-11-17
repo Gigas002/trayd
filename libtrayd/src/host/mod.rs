@@ -1007,6 +1007,11 @@ async fn fetch_item_properties(
             warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
             Vec::new()
         });
+    // Optional in the specification and absent for most apps: no warning.
+    let icon_theme_path = props
+        .read("IconThemePath", proxy.icon_theme_path())
+        .await
+        .unwrap_or_default();
     let menu_path = props
         .read("Menu", proxy.menu_path())
         .await
@@ -1057,6 +1062,7 @@ async fn fetch_item_properties(
             name: attention_icon_name,
             pixmaps: pixmaps_from_dbus(raw_attention_pixmaps),
         },
+        icon_theme_path,
         menu_path,
     }
 }
@@ -1153,6 +1159,13 @@ async fn run_item_signal_watcher(
             return;
         }
     };
+    let new_theme_path = match proxy.receive_new_icon_theme_path().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(%e, %id, "signal watcher: new_icon_theme_path subscribe failed");
+            return;
+        }
+    };
     let new_tool_tip = match proxy.receive_new_tool_tip().await {
         Ok(s) => s,
         Err(e) => {
@@ -1168,6 +1181,7 @@ async fn run_item_signal_watcher(
         new_attention,
         new_overlay,
         new_menu,
+        new_theme_path,
         new_tool_tip
     );
     debug!(%id, "item signal watcher started");
@@ -1201,6 +1215,12 @@ async fn run_item_signal_watcher(
             Some(_) = new_overlay.next() => mark(|d| d.overlay = true),
             Some(_) = new_menu.next() => mark(|d| d.menu = true),
             Some(_) = new_tool_tip.next() => mark(|d| d.tool_tip = true),
+            Some(sig) = new_theme_path.next() => {
+                // The new path travels in the signal: no D-Bus read needed.
+                if let Ok(args) = sig.args() {
+                    on_icon_theme_path_changed(&inner, &id, args.icon_theme_path().clone()).await;
+                }
+            }
             else => break,
         }
     }
@@ -1279,6 +1299,13 @@ async fn on_icon_changed(
         });
         (resolved, pixmaps)
     };
+    // `NewIcon` also announces a new `IconThemePath` (KDE has no separate
+    // signal for it).
+    let theme_path = if attention {
+        None
+    } else {
+        Some(proxy.icon_theme_path().await.unwrap_or_default())
+    };
     let new_icon = IconData {
         name: icon_name,
         pixmaps: pixmaps_from_dbus(raw),
@@ -1292,6 +1319,9 @@ async fn on_icon_changed(
             } else {
                 item.icon = new_icon;
             }
+            if let Some(path) = theme_path {
+                item.icon_theme_path = path;
+            }
             item.clone()
         });
         maybe_item.map(HostEvent::ItemChanged)
@@ -1299,6 +1329,21 @@ async fn on_icon_changed(
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
         debug!(%id, attention, "icon updated");
+    }
+}
+
+/// Store a new `IconThemePath` sent with `NewIconThemePath`.
+async fn on_icon_theme_path_changed(inner: &Arc<TrayHostInner>, id: &ItemId, path: String) {
+    let event = {
+        let mut state = inner.state.write().await;
+        state.items.get_mut(id).map(|item| {
+            item.icon_theme_path = path;
+            HostEvent::ItemChanged(item.clone())
+        })
+    };
+    if let Some(e) = event {
+        let _ = inner.events_tx.send(e);
+        debug!(%id, "icon theme path updated");
     }
 }
 

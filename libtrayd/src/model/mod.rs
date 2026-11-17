@@ -209,6 +209,10 @@ pub struct TrayItem {
     pub icon: IconData,
     /// Attention icon data — shown when `status == NeedsAttention`.
     pub attention_icon: IconData,
+    /// Directory holding an icon theme the app ships its own icons in
+    /// (SNI `IconThemePath`); `""` when it has none.  Icon names may only
+    /// resolve there.
+    pub icon_theme_path: String,
     /// D-Bus object path for the associated DBusMenu object (`""` if absent).
     pub menu_path: String,
 }

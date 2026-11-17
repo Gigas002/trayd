@@ -66,6 +66,7 @@ fn dummy_item(id: &str) -> TrayItem {
         overlay_icon: IconData::default(),
         icon: IconData::default(),
         attention_icon: IconData::default(),
+        icon_theme_path: String::new(),
         menu_path: String::new(),
     }
 }

@@ -346,6 +346,11 @@ fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
             Some(item.tool_tip.description.clone())
         },
         overlay_icon_handle: item.overlay_icon.as_handle(),
+        icon_theme_path: if item.icon_theme_path.is_empty() {
+            None
+        } else {
+            Some(item.icon_theme_path.clone())
+        },
     }
 }
 

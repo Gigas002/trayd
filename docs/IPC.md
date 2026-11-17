@@ -82,7 +82,7 @@ Every request is a JSON object on one line:
 }
 ```
 
-`title`, `icon_handle`, `category`, `tooltip_title`, `tooltip_description`, and `overlay_icon_handle` are omitted when absent.
+`title`, `icon_handle`, `category`, `tooltip_title`, `tooltip_description`, `overlay_icon_handle` and `icon_theme_path` are omitted when absent.
 `item_is_menu` is omitted when `false`.
 
 | Field                 | Type             | Notes                                                                                     |
@@ -96,6 +96,7 @@ Every request is a JSON object on one line:
 | `tooltip_title`       | string \| absent | tooltip title text                                                                        |
 | `tooltip_description` | string \| absent | tooltip description text                                                                  |
 | `overlay_icon_handle` | string \| absent | overlay icon theme name (badge shown on top of the normal icon)                           |
+| `icon_theme_path`     | string \| absent | directory of an icon theme the app ships (SNI `IconThemePath`); `icon_handle` and `overlay_icon_handle` may only resolve there. Whether to search it, and before or after the user's theme, is the consumer's choice |
 
 ### `MenuItem`
 

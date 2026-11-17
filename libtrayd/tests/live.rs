@@ -446,3 +446,44 @@ async fn item_methods_on_an_unknown_item_are_not_found() {
         Err(TraydError::NotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn icon_theme_path_is_read_and_kept_up_to_date() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let state = FakeState {
+        icon_theme_path: "/opt/fake/icons".into(),
+        ..FakeState::default()
+    };
+    let app = FakeApp::new(&bus, state).await;
+    app.register_as("org.example.Fake").await;
+    wait_for(&host, "theme path read at registration", |i| {
+        i.len() == 1 && i[0].icon_theme_path == "/opt/fake/icons"
+    })
+    .await;
+
+    // libappindicator announces it with NewIconThemePath(path)...
+    app.set_icon_theme_path("/opt/fake/icons2").await;
+    wait_for(&host, "theme path from NewIconThemePath", |i| {
+        i[0].icon_theme_path == "/opt/fake/icons2"
+    })
+    .await;
+
+    // ...KDE apps with NewIcon.
+    app.state.lock().unwrap().icon_theme_path = "/opt/fake/icons3".into();
+    app.emit_new_icon().await;
+    wait_for(&host, "theme path re-read on NewIcon", |i| {
+        i[0].icon_theme_path == "/opt/fake/icons3"
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn apps_without_an_icon_theme_path_have_an_empty_one() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    let items = wait_for(&host, "item listed", |i| i.len() == 1).await;
+    assert_eq!(items[0].icon_theme_path, "");
+}

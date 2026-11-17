@@ -152,6 +152,7 @@ pub struct FakeState {
     pub title: String,
     pub status: String,
     pub icon_name: String,
+    pub icon_theme_path: String,
     pub pixmaps: Vec<(i32, i32, Vec<u8>)>,
     pub item_is_menu: bool,
     pub menu: Vec<Row>,
@@ -176,6 +177,7 @@ impl Default for FakeState {
             title: "Fake App".into(),
             status: "Active".into(),
             icon_name: "fake-icon".into(),
+            icon_theme_path: String::new(),
             pixmaps: Vec::new(),
             item_is_menu: false,
             menu: vec![Row::label(1, "Open"), Row::label(2, "Quit")],
@@ -256,6 +258,10 @@ impl FakeItem {
         self.read(|s| s.icon_name.clone()).await
     }
     #[zbus(property)]
+    async fn icon_theme_path(&self) -> String {
+        self.read(|s| s.icon_theme_path.clone()).await
+    }
+    #[zbus(property)]
     async fn icon_pixmap(&self) -> Vec<(i32, i32, Vec<u8>)> {
         self.read(|s| s.pixmaps.clone()).await
     }
@@ -280,6 +286,8 @@ impl FakeItem {
     pub async fn new_icon(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
     #[zbus(signal)]
     pub async fn new_status(emitter: &SignalEmitter<'_>, status: &str) -> zbus::Result<()>;
+    #[zbus(signal)]
+    pub async fn new_icon_theme_path(emitter: &SignalEmitter<'_>, path: &str) -> zbus::Result<()>;
 }
 
 /// `GetLayout` node: `(id, properties, children)`.
@@ -429,6 +437,13 @@ impl FakeApp {
         self.state.lock().unwrap().icon_name = name.to_owned();
         let emitter = SignalEmitter::new(&self.conn, "/StatusNotifierItem").unwrap();
         FakeItem::new_icon(&emitter).await.unwrap();
+    }
+
+    /// Change `IconThemePath` and announce it the libappindicator way.
+    pub async fn set_icon_theme_path(&self, path: &str) {
+        self.state.lock().unwrap().icon_theme_path = path.to_owned();
+        let emitter = SignalEmitter::new(&self.conn, "/StatusNotifierItem").unwrap();
+        FakeItem::new_icon_theme_path(&emitter, path).await.unwrap();
     }
 
     pub async fn emit_new_icon(&self) {
