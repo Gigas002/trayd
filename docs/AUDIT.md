@@ -93,7 +93,7 @@ the IPC socket.
 | Error codes              | Malformed JSON, unknown commands and bad versions were answered `NOT_IMPLEMENTED` and the connection was dropped; `v` was never checked. New `INVALID_REQUEST`; the connection stays usable after a well-framed bad line.                                                                                                                                                            | low      | Fixed (1bc22a3)                            |
 | Pixmap tie               | The comment promised "prefer larger" on equal distance; the code kept the first. Fixed with the validation rewrite.                                                                                                                                                                                                                                                                  | low      | Fixed (91e391c)                            |
 | Unquoted `--dmenu-cmd`   | The command was split on whitespace: `-p 'Tray menu'` became three arguments. A missing program was treated as a cancelled menu.                                                                                                                                                                                                                                                     | low      | Fixed (74809ac)                            |
-| Stale subscriber tasks   | A `subscribe` client that disconnects is noticed at the next tray event, when the write fails. Until then its task and broadcast receiver stay (bounded, no growth).                                                                                                                                                                                                                 | low      | Accepted                                   |
+| Stale subscriber tasks   | A `subscribe` client that disconnects was noticed at the next tray event, when the write failed; until then its task and broadcast receiver stayed (bounded, no growth). The server now watches the read side and drops it at once. | low      | Fixed (fda0a3f)                            |
 | DBusMenu id cast         | `item_id` is sent as `u32` and cast back to `i32`; the cast round-trips, so negative DBusMenu ids still work.                                                                                                                                                                                                                                                                        | —        | OK                                         |
 
 ## 4. Performance
@@ -150,14 +150,15 @@ Subscribers still get one snapshot per 50 ms window of changes (unchanged).
 | Watcher + host, `RegisteredStatusNotifierItems`  | Yes                                                             |
 | Registration by name, path, or `name/path`       | Yes                                                             |
 | Title, status, category, tooltip text            | Yes (now kept up to date, c7783e0)                              |
-| Icon name, pixmaps, attention icon, overlay name | Yes; overlay pixmaps aren't exposed over IPC                    |
-| `IconThemePath` (apps shipping their own icons)  | No: the property isn't read, so such icon names may not resolve |
+| Icon name, pixmaps, attention icon, overlay name | Yes; overlay pixmaps over IPC since 6b45ff7                     |
+| `IconThemePath` (apps shipping their own icons)  | Yes (115a9cb): sent as `icon_theme_path`; clients decide whether to search it |
 | Activate                                         | Yes                                                             |
-| SecondaryActivate (middle click), Scroll         | No IPC command                                                  |
-| ContextMenu for items without DBusMenu           | No                                                              |
+| SecondaryActivate (middle click), Scroll         | Yes (b7dfe6c)                                                   |
+| ContextMenu for items without DBusMenu           | Yes (b7dfe6c)                                                   |
 | DBusMenu: rows, submenus, `AboutToShow`          | Yes (`AboutToShow` since be04869)                               |
 | DBusMenu: separators, disabled, check/radio      | Yes (since be04869, f4bf8ed)                                    |
-| DBusMenu: row icons, shortcuts, `LayoutUpdated`  | No; clients re-fetch the menu each time it opens                |
+| DBusMenu: row icons, shortcuts                   | Yes (bb83ea4)                                                   |
+| DBusMenu: `LayoutUpdated`                        | No; clients re-fetch the menu each time it opens                |
 | XEmbed (legacy X11 tray icons)                   | No (Wayland-only by design)                                     |
 
 ## 8. Left open
@@ -166,12 +167,14 @@ Subscribers still get one snapshot per 50 ms window of changes (unchanged).
   breaking); set the date in CHANGELOG.md when tagging. Nothing was published.
 - **CI**: the `dbus-daemon` install step and the full `cargo deny check` job
   were not run on GitHub here; watch their first run.
-- **Features** (§7): `IconThemePath`, secondary activation and scroll over
-  IPC, menu row icons, overlay pixmaps.
-- **Subscriber cleanup** (§3): noticing a closed `subscribe` client before
-  the next event would need the server to read from it while streaming.
-- **Cosmetic**: `RegisterStatusNotifierHost`'s argument shows up as
-  `_service` in introspection.
+- ~~**Features** (§7): `IconThemePath`, secondary activation and scroll over
+  IPC, menu row icons, overlay pixmaps.~~ Done (b7dfe6c, 115a9cb, 6b45ff7,
+  bb83ea4), along with `ContextMenu` and menu shortcuts. XEmbed stays out
+  (Wayland-only by design), and so does `LayoutUpdated`: clients fetch a
+  menu each time it opens.
+- ~~**Subscriber cleanup** (§3)~~: done (fda0a3f).
+- ~~**Cosmetic**: `RegisterStatusNotifierHost`'s argument shows up as
+  `_service` in introspection.~~ Done (1e8e787).
 
 ## 9. Re-running the audit
 
