@@ -187,8 +187,41 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
             codec::write_response(write, &resp).await.is_ok()
         }
 
+        Cmd::SecondaryActivate { app_id, x, y } => {
+            let id = ItemId::from(app_id.clone());
+            let resp = ack_or_error(&app_id, host.secondary_activate(&id, x, y).await);
+            codec::write_response(write, &resp).await.is_ok()
+        }
+
+        Cmd::Scroll {
+            app_id,
+            delta,
+            orientation,
+        } => {
+            let id = ItemId::from(app_id.clone());
+            let resp = ack_or_error(&app_id, host.scroll(&id, delta, orientation.into()).await);
+            codec::write_response(write, &resp).await.is_ok()
+        }
+
+        Cmd::ContextMenu { app_id, x, y } => {
+            let id = ItemId::from(app_id.clone());
+            let resp = ack_or_error(&app_id, host.context_menu(&id, x, y).await);
+            codec::write_response(write, &resp).await.is_ok()
+        }
+
         // Handled by `handle_connection`, which owns the read side.
         Cmd::Subscribe => false,
+    }
+}
+
+/// `ack`, or the error response for a failed item method call.
+fn ack_or_error(app_id: &str, result: Result<(), TraydError>) -> IpcResponse {
+    match result {
+        Ok(()) => IpcResponse::ok(OkPayload::Ack),
+        Err(TraydError::NotFound(_)) => {
+            IpcResponse::err(ErrorCode::NotFound, format!("{app_id} not found"))
+        }
+        Err(e) => IpcResponse::err(ErrorCode::BusFailed, e.to_string()),
     }
 }
 

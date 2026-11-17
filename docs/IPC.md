@@ -28,6 +28,9 @@ Every request is a JSON object on one line:
 | `get_menu`   | `"app_id": string`, `"submenu_id": int\|null` | menu consumers                    |
 | `activate`   | `"app_id": string`, `"item_id": int`          | menu consumers                    |
 | `get_pixmap` | `"app_id": string`, `"size": int`             | icon-rendering consumers          |
+| `secondary_activate` | `"app_id": string`, `"x": int`, `"y": int` (both optional, `0`) | bars (middle click) |
+| `scroll`     | `"app_id": string`, `"delta": int`, `"orientation": "vertical"\|"horizontal"` (optional, `"vertical"`) | bars (wheel) |
+| `context_menu` | `"app_id": string`, `"x": int`, `"y": int` (both optional, `0`) | bars, for items without a DBusMenu |
 
 ---
 
@@ -45,7 +48,7 @@ Every request is a JSON object on one line:
 | `items`  | `"items": MinimalTrayItem[]`                                                         | `get_items`          |
 | `event`  | `"event": TrayEvent`                                                                 | `subscribe` (stream) |
 | `menu`   | `"app_id": string`, `"items": MenuItem[]`                                            | `get_menu`           |
-| `ack`    | —                                                                                    | `activate`           |
+| `ack`    | —                                                                                    | `activate`, `secondary_activate`, `scroll`, `context_menu` |
 | `pixmap` | `"app_id": string`, `"size": int`, `"width": int`, `"height": int`, `"data": string` | `get_pixmap`         |
 
 ### Error
@@ -193,6 +196,19 @@ Golden request/response pairs live under `examples/ipc-examples/*.jsonl` — fir
 
 ```
 {"v":1,"cmd":"activate","app_id":"org.example.App","item_id":1}
+{"v":1,"type":"ack"}
+```
+
+### `secondary_activate`, `scroll`, `context_menu`
+
+These call the SNI methods of the same name on the app. `delta` is passed
+through unchanged; its sign is the direction (KDE sends ±120 per wheel notch).
+`x` and `y` are a screen position hint (the app may show a window or menu
+there). An app without a DBusMenu (`get_menu` answers `NOT_FOUND`) may still
+show its own menu on `context_menu`.
+
+```
+{"v":1,"cmd":"scroll","app_id":"org.example.App","delta":-120}
 {"v":1,"type":"ack"}
 ```
 

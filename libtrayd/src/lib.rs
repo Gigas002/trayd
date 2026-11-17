@@ -10,7 +10,8 @@ pub mod model;
 pub use error::TraydError;
 pub use host::TrayHost;
 pub use model::{
-    HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem, TrayStatus,
+    HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ScrollOrientation, ToolTip,
+    TrayItem, TrayStatus,
 };
 
 /// Library version (matches workspace package version at release time).

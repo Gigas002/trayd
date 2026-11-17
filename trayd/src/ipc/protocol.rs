@@ -49,6 +49,48 @@ pub enum Cmd {
         app_id: String,
         size: u32,
     },
+    /// SNI `SecondaryActivate` (usually a middle click).
+    SecondaryActivate {
+        app_id: String,
+        #[serde(default)]
+        x: i32,
+        #[serde(default)]
+        y: i32,
+    },
+    /// SNI `Scroll`: `delta` steps (sign is the direction) in `orientation`.
+    Scroll {
+        app_id: String,
+        delta: i32,
+        #[serde(default)]
+        orientation: Orientation,
+    },
+    /// SNI `ContextMenu`: the app shows its own menu, for items without a
+    /// DBusMenu.
+    ContextMenu {
+        app_id: String,
+        #[serde(default)]
+        x: i32,
+        #[serde(default)]
+        y: i32,
+    },
+}
+
+/// Scroll direction of [`Cmd::Scroll`].
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    #[default]
+    Vertical,
+    Horizontal,
+}
+
+impl From<Orientation> for libtrayd::ScrollOrientation {
+    fn from(o: Orientation) -> Self {
+        match o {
+            Orientation::Vertical => Self::Vertical,
+            Orientation::Horizontal => Self::Horizontal,
+        }
+    }
 }
 
 /// Daemon → consumer response. Tries `Err` variant first on deserialization.

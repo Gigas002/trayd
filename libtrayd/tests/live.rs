@@ -3,7 +3,7 @@
 mod common;
 
 use common::{FakeApp, FakeState, wait_for};
-use libtrayd::ItemId;
+use libtrayd::{ItemId, ScrollOrientation, TraydError};
 
 #[tokio::test]
 async fn registered_item_is_listed_with_its_properties() {
@@ -397,4 +397,52 @@ async fn watcher_introspection_names_every_argument() {
         .expect("RegisterStatusNotifierHost is introspectable");
     assert!(host_method.contains("name=\"service\""), "{host_method}");
     assert!(!xml.contains("name=\"_"), "{xml}");
+}
+
+#[tokio::test]
+async fn secondary_activation_scroll_and_context_menu_reach_the_app() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    host.secondary_activate(&id, 10, 20).await.unwrap();
+    host.scroll(&id, -120, ScrollOrientation::Vertical)
+        .await
+        .unwrap();
+    host.scroll(&id, 1, ScrollOrientation::Horizontal)
+        .await
+        .unwrap();
+    host.context_menu(&id, 30, 40).await.unwrap();
+
+    let s = app.state.lock().unwrap();
+    assert_eq!(s.secondary_activations, vec![(10, 20)]);
+    assert_eq!(
+        s.scrolls,
+        vec![(-120, "vertical".to_owned()), (1, "horizontal".to_owned())]
+    );
+    assert_eq!(s.context_menus, vec![(30, 40)]);
+    assert!(s.activations.is_empty());
+}
+
+#[tokio::test]
+async fn item_methods_on_an_unknown_item_are_not_found() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let id = ItemId::from("org.example.Missing");
+    assert!(matches!(
+        host.secondary_activate(&id, 0, 0).await,
+        Err(TraydError::NotFound(_))
+    ));
+    assert!(matches!(
+        host.scroll(&id, 1, ScrollOrientation::Vertical).await,
+        Err(TraydError::NotFound(_))
+    ));
+    assert!(matches!(
+        host.context_menu(&id, 0, 0).await,
+        Err(TraydError::NotFound(_))
+    ));
 }

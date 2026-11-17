@@ -161,6 +161,9 @@ pub struct FakeState {
     pub hang: bool,
     // Recorded calls:
     pub activations: Vec<(i32, i32)>,
+    pub secondary_activations: Vec<(i32, i32)>,
+    pub scrolls: Vec<(i32, String)>,
+    pub context_menus: Vec<(i32, i32)>,
     pub events: Vec<(i32, String)>,
     pub about_to_show: Vec<i32>,
     pub property_reads: usize,
@@ -179,6 +182,9 @@ impl Default for FakeState {
             lazy_submenus: Vec::new(),
             hang: false,
             activations: Vec::new(),
+            secondary_activations: Vec::new(),
+            scrolls: Vec::new(),
+            context_menus: Vec::new(),
             events: Vec::new(),
             about_to_show: Vec::new(),
             property_reads: 0,
@@ -210,6 +216,23 @@ impl FakeItem {
 impl FakeItem {
     fn activate(&self, x: i32, y: i32) {
         self.state.lock().unwrap().activations.push((x, y));
+    }
+    fn secondary_activate(&self, x: i32, y: i32) {
+        self.state
+            .lock()
+            .unwrap()
+            .secondary_activations
+            .push((x, y));
+    }
+    fn scroll(&self, delta: i32, orientation: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .scrolls
+            .push((delta, orientation.to_owned()));
+    }
+    fn context_menu(&self, x: i32, y: i32) {
+        self.state.lock().unwrap().context_menus.push((x, y));
     }
 
     #[zbus(property)]

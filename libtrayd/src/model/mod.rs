@@ -69,6 +69,25 @@ impl std::fmt::Display for TrayStatus {
     }
 }
 
+// ─── ScrollOrientation ──────────────────────────────────────────────────────
+
+/// Direction of a [`crate::host::TrayHost::scroll`] request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollOrientation {
+    Vertical,
+    Horizontal,
+}
+
+impl ScrollOrientation {
+    /// The orientation string of the SNI `Scroll` method.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Vertical => "vertical",
+            Self::Horizontal => "horizontal",
+        }
+    }
+}
+
 // ─── Icon types ──────────────────────────────────────────────────────────────
 
 /// A single pixmap surface at a given resolution.

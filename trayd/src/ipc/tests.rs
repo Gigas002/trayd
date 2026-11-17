@@ -498,3 +498,65 @@ async fn a_subscriber_that_disconnects_is_dropped_without_waiting_for_an_event()
     drop(write);
     wait_count(0).await;
 }
+
+#[tokio::test]
+async fn item_methods_on_an_unknown_app_return_not_found() {
+    let Some(srv) = start_server("itemcmds").await else {
+        return;
+    };
+    let lines = raw_exchange(
+        &srv.path,
+        concat!(
+            r#"{"v":1,"cmd":"secondary_activate","app_id":"x.Missing"}"#,
+            "\n",
+            r#"{"v":1,"cmd":"scroll","app_id":"x.Missing","delta":-1}"#,
+            "\n",
+            r#"{"v":1,"cmd":"context_menu","app_id":"x.Missing","x":5,"y":6}"#,
+            "\n",
+        )
+        .as_bytes(),
+    )
+    .await;
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    for line in &lines {
+        assert!(line.contains("NOT_FOUND"), "{line}");
+    }
+}
+
+#[test]
+fn item_method_requests_parse_with_defaults() {
+    use super::protocol::Orientation;
+    let parse = |line: &str| serde_json::from_str::<IpcRequest>(line).unwrap().cmd;
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"secondary_activate","app_id":"a"}"#),
+        Cmd::SecondaryActivate {
+            app_id: "a".into(),
+            x: 0,
+            y: 0
+        }
+    );
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"scroll","app_id":"a","delta":3}"#),
+        Cmd::Scroll {
+            app_id: "a".into(),
+            delta: 3,
+            orientation: Orientation::Vertical
+        }
+    );
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"scroll","app_id":"a","delta":-3,"orientation":"horizontal"}"#),
+        Cmd::Scroll {
+            app_id: "a".into(),
+            delta: -3,
+            orientation: Orientation::Horizontal
+        }
+    );
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"context_menu","app_id":"a","x":1,"y":2}"#),
+        Cmd::ContextMenu {
+            app_id: "a".into(),
+            x: 1,
+            y: 2
+        }
+    );
+}

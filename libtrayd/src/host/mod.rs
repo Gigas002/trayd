@@ -26,8 +26,8 @@ use crate::{
     dbus::watcher::{SharedWatcherInner, service_belongs_to},
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
     model::{
-        HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
-        TrayStatus,
+        HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ScrollOrientation, ToolTip,
+        TrayItem, TrayStatus,
     },
 };
 
@@ -334,6 +334,73 @@ impl TrayHost {
         }
     }
 
+    /// Secondary activation (usually a middle click) at screen position
+    /// `(x, y)`; apps that don't care get `(0, 0)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item is not in the cache.
+    /// - [`TraydError::ActivationFailed`] when the app returns an error.
+    pub async fn secondary_activate(&self, id: &ItemId, x: i32, y: i32) -> Result<(), TraydError> {
+        let proxy = self.item_proxy(id).await?;
+        proxy
+            .secondary_activate(x, y)
+            .await
+            .map_err(|e| activation_failed(id, e))
+    }
+
+    /// Scroll over the item by `delta` (sign is the direction; KDE sends 120
+    /// per wheel notch) in `orientation`.
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item is not in the cache.
+    /// - [`TraydError::ActivationFailed`] when the app returns an error.
+    pub async fn scroll(
+        &self,
+        id: &ItemId,
+        delta: i32,
+        orientation: ScrollOrientation,
+    ) -> Result<(), TraydError> {
+        let proxy = self.item_proxy(id).await?;
+        proxy
+            .scroll(delta, orientation.as_str())
+            .await
+            .map_err(|e| activation_failed(id, e))
+    }
+
+    /// Ask the app to show its own context menu at screen position `(x, y)`.
+    /// For items without a DBusMenu (see [`TrayItem::menu_path`]); items with
+    /// one usually ignore it.
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item is not in the cache.
+    /// - [`TraydError::ActivationFailed`] when the app returns an error.
+    pub async fn context_menu(&self, id: &ItemId, x: i32, y: i32) -> Result<(), TraydError> {
+        let proxy = self.item_proxy(id).await?;
+        proxy
+            .context_menu(x, y)
+            .await
+            .map_err(|e| activation_failed(id, e))
+    }
+
+    /// A proxy for the item's `StatusNotifierItem` object.
+    async fn item_proxy(
+        &self,
+        id: &ItemId,
+    ) -> Result<StatusNotifierItemProxy<'static>, TraydError> {
+        let (bus_name, object_path) = {
+            let state = self.inner.state.read().await;
+            let item = state
+                .items
+                .get(id)
+                .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
+            (item.bus_name.clone(), item.object_path.clone())
+        };
+        build_proxy(&self.inner.conn, &bus_name, &object_path).await
+    }
+
     /// Fetch the direct children of a menu node for the given tray item.
     ///
     /// - `submenu_id = None` fetches the top-level menu (parent id `0`).
@@ -381,6 +448,13 @@ impl TrayHost {
 }
 
 // ─── Proxy helpers ───────────────────────────────────────────────────────────
+
+fn activation_failed(id: &ItemId, e: zbus::Error) -> TraydError {
+    TraydError::ActivationFailed {
+        app_id: id.to_string(),
+        reason: e.to_string(),
+    }
+}
 
 /// Given a unique D-Bus bus name (e.g. `:1.201`), return the first well-known
 /// name belonging to the same process (matched by Unix PID).
