@@ -34,6 +34,49 @@ pub enum Command {
     },
     /// Print tray items (`get_items`) as JSON — useful for scripts.
     Items,
+    /// Activate an app (usually its window), or with `--item-id` a menu row.
+    Activate {
+        /// DBusMenu row id; `0` (the default) activates the app itself.
+        #[arg(long, default_value_t = 0)]
+        item_id: u32,
+        /// StatusNotifier app id (wire `app_id`).
+        #[arg(long)]
+        app_id: String,
+    },
+    /// Secondary activation, what most apps do on a middle click.
+    SecondaryActivate {
+        /// Screen position hint for the app.
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        x: i32,
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        y: i32,
+        /// StatusNotifier app id (wire `app_id`).
+        #[arg(long)]
+        app_id: String,
+    },
+    /// Scroll over an app's icon (e.g. volume up/down).
+    Scroll {
+        /// Amount; the sign is the direction (KDE sends 120 per wheel notch).
+        #[arg(long, allow_negative_numbers = true)]
+        delta: i32,
+        /// Scroll horizontally instead of vertically.
+        #[arg(long)]
+        horizontal: bool,
+        /// StatusNotifier app id (wire `app_id`).
+        #[arg(long)]
+        app_id: String,
+    },
+    /// Ask an app without a DBusMenu to show its own menu.
+    ContextMenu {
+        /// Screen position for the menu.
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        x: i32,
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        y: i32,
+        /// StatusNotifier app id (wire `app_id`).
+        #[arg(long)]
+        app_id: String,
+    },
     /// Stream tray-state change events as NDJSON until the daemon closes the connection.
     Subscribe,
 }
@@ -56,6 +99,16 @@ impl Cli {
                 println!("{json}");
                 Ok(())
             }
+            Command::Activate { item_id, app_id } => client.activate(&app_id, item_id).await,
+            Command::SecondaryActivate { x, y, app_id } => {
+                client.secondary_activate(&app_id, x, y).await
+            }
+            Command::Scroll {
+                delta,
+                horizontal,
+                app_id,
+            } => client.scroll(&app_id, delta, horizontal).await,
+            Command::ContextMenu { x, y, app_id } => client.context_menu(&app_id, x, y).await,
             Command::Subscribe => {
                 tracing::debug!("trayctl subscribe");
                 client.subscribe().await?;

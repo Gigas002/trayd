@@ -26,8 +26,8 @@ use crate::{
     dbus::watcher::{SharedWatcherInner, service_belongs_to},
     dbus::{DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, WatcherMsg},
     model::{
-        HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ToolTip, TrayItem,
-        TrayStatus,
+        HostEvent, IconData, IconPixmap, ItemId, MenuNode, PixmapData, ScrollOrientation, ToolTip,
+        TrayItem, TrayStatus,
     },
 };
 
@@ -205,6 +205,11 @@ impl TrayHost {
         self.inner.events_tx.subscribe()
     }
 
+    /// Number of live [`TrayHost::subscribe`] receivers.
+    pub fn subscriber_count(&self) -> usize {
+        self.inner.events_tx.receiver_count()
+    }
+
     /// Snapshot of all currently cached items, in registration order.
     pub async fn items(&self) -> Vec<TrayItem> {
         self.inner.state.read().await.sorted_items()
@@ -243,24 +248,29 @@ impl TrayHost {
             &item.icon
         };
 
-        if icon.pixmaps.is_empty() {
-            return Err(TraydError::NotFound(format!("no pixmap for {id}")));
-        }
+        nearest_pixmap(icon, size)
+            .ok_or_else(|| TraydError::NotFound(format!("no pixmap for {id}")))
+    }
 
-        // Pick the nearest width; on a tie prefer the larger pixmap, which
-        // scales down better than a small one scales up.
-        let best = icon
-            .pixmaps
-            .iter()
-            .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))
-            .expect("pixmaps is non-empty");
-
-        // `pixmaps_from_dbus` guarantees positive dimensions.
-        Ok(PixmapData {
-            width: best.width.unsigned_abs(),
-            height: best.height.unsigned_abs(),
-            data: best.data.clone(),
-        })
+    /// Like [`TrayHost::get_pixmap`], for the overlay icon (a badge drawn
+    /// over the normal icon).
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item or its overlay pixmap data is
+    ///   absent.
+    pub async fn get_overlay_pixmap(
+        &self,
+        id: &ItemId,
+        size: u16,
+    ) -> Result<PixmapData, TraydError> {
+        let state = self.inner.state.read().await;
+        let item = state
+            .items
+            .get(id)
+            .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
+        nearest_pixmap(&item.overlay_icon, size)
+            .ok_or_else(|| TraydError::NotFound(format!("no overlay pixmap for {id}")))
     }
 
     /// Activate a tray item.
@@ -329,6 +339,73 @@ impl TrayHost {
         }
     }
 
+    /// Secondary activation (usually a middle click) at screen position
+    /// `(x, y)`; apps that don't care get `(0, 0)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item is not in the cache.
+    /// - [`TraydError::ActivationFailed`] when the app returns an error.
+    pub async fn secondary_activate(&self, id: &ItemId, x: i32, y: i32) -> Result<(), TraydError> {
+        let proxy = self.item_proxy(id).await?;
+        proxy
+            .secondary_activate(x, y)
+            .await
+            .map_err(|e| activation_failed(id, e))
+    }
+
+    /// Scroll over the item by `delta` (sign is the direction; KDE sends 120
+    /// per wheel notch) in `orientation`.
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item is not in the cache.
+    /// - [`TraydError::ActivationFailed`] when the app returns an error.
+    pub async fn scroll(
+        &self,
+        id: &ItemId,
+        delta: i32,
+        orientation: ScrollOrientation,
+    ) -> Result<(), TraydError> {
+        let proxy = self.item_proxy(id).await?;
+        proxy
+            .scroll(delta, orientation.as_str())
+            .await
+            .map_err(|e| activation_failed(id, e))
+    }
+
+    /// Ask the app to show its own context menu at screen position `(x, y)`.
+    /// For items without a DBusMenu (see [`TrayItem::menu_path`]); items with
+    /// one usually ignore it.
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item is not in the cache.
+    /// - [`TraydError::ActivationFailed`] when the app returns an error.
+    pub async fn context_menu(&self, id: &ItemId, x: i32, y: i32) -> Result<(), TraydError> {
+        let proxy = self.item_proxy(id).await?;
+        proxy
+            .context_menu(x, y)
+            .await
+            .map_err(|e| activation_failed(id, e))
+    }
+
+    /// A proxy for the item's `StatusNotifierItem` object.
+    async fn item_proxy(
+        &self,
+        id: &ItemId,
+    ) -> Result<StatusNotifierItemProxy<'static>, TraydError> {
+        let (bus_name, object_path) = {
+            let state = self.inner.state.read().await;
+            let item = state
+                .items
+                .get(id)
+                .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
+            (item.bus_name.clone(), item.object_path.clone())
+        };
+        build_proxy(&self.inner.conn, &bus_name, &object_path).await
+    }
+
     /// Fetch the direct children of a menu node for the given tray item.
     ///
     /// - `submenu_id = None` fetches the top-level menu (parent id `0`).
@@ -376,6 +453,29 @@ impl TrayHost {
 }
 
 // ─── Proxy helpers ───────────────────────────────────────────────────────────
+
+/// The pixmap of `icon` closest to `size` wide; on a tie the larger one,
+/// which scales down better than a small one scales up.  `None` without
+/// pixmaps.
+pub(crate) fn nearest_pixmap(icon: &IconData, size: u16) -> Option<PixmapData> {
+    let best = icon
+        .pixmaps
+        .iter()
+        .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))?;
+    // `pixmaps_from_dbus` guarantees positive dimensions.
+    Some(PixmapData {
+        width: best.width.unsigned_abs(),
+        height: best.height.unsigned_abs(),
+        data: best.data.clone(),
+    })
+}
+
+fn activation_failed(id: &ItemId, e: zbus::Error) -> TraydError {
+    TraydError::ActivationFailed {
+        app_id: id.to_string(),
+        reason: e.to_string(),
+    }
+}
 
 /// Given a unique D-Bus bus name (e.g. `:1.201`), return the first well-known
 /// name belonging to the same process (matched by Unix PID).
@@ -464,6 +564,14 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     let enabled = get_bool_prop(&props, "enabled").unwrap_or(true);
     let visible = get_bool_prop(&props, "visible").unwrap_or(true);
     let icon_name = get_str_prop(&props, "icon-name");
+    let icon_data = props
+        .get("icon-data")
+        .and_then(|v| Vec::<u8>::try_from(v.clone()).ok())
+        .unwrap_or_default();
+    let shortcuts = props
+        .get("shortcut")
+        .and_then(|v| Vec::<Vec<String>>::try_from(v.clone()).ok())
+        .unwrap_or_default();
     // A submenu is indicated by `children-display` in props, or non-empty children
     // (the latter occurs when GetLayout was called with depth > 1).
     let is_submenu = props.contains_key("children-display") || !nested_children.is_empty();
@@ -485,6 +593,8 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
         enabled,
         visible,
         icon_name,
+        icon_data,
+        shortcuts,
         is_submenu,
         is_separator,
         toggle_state,
@@ -928,6 +1038,11 @@ async fn fetch_item_properties(
             warn!(%e, %service_id, "failed to fetch attention_icon_pixmap");
             Vec::new()
         });
+    // Optional in the specification and absent for most apps: no warning.
+    let icon_theme_path = props
+        .read("IconThemePath", proxy.icon_theme_path())
+        .await
+        .unwrap_or_default();
     let menu_path = props
         .read("Menu", proxy.menu_path())
         .await
@@ -978,6 +1093,7 @@ async fn fetch_item_properties(
             name: attention_icon_name,
             pixmaps: pixmaps_from_dbus(raw_attention_pixmaps),
         },
+        icon_theme_path,
         menu_path,
     }
 }
@@ -1074,6 +1190,13 @@ async fn run_item_signal_watcher(
             return;
         }
     };
+    let new_theme_path = match proxy.receive_new_icon_theme_path().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(%e, %id, "signal watcher: new_icon_theme_path subscribe failed");
+            return;
+        }
+    };
     let new_tool_tip = match proxy.receive_new_tool_tip().await {
         Ok(s) => s,
         Err(e) => {
@@ -1089,6 +1212,7 @@ async fn run_item_signal_watcher(
         new_attention,
         new_overlay,
         new_menu,
+        new_theme_path,
         new_tool_tip
     );
     debug!(%id, "item signal watcher started");
@@ -1122,6 +1246,12 @@ async fn run_item_signal_watcher(
             Some(_) = new_overlay.next() => mark(|d| d.overlay = true),
             Some(_) = new_menu.next() => mark(|d| d.menu = true),
             Some(_) = new_tool_tip.next() => mark(|d| d.tool_tip = true),
+            Some(sig) = new_theme_path.next() => {
+                // The new path travels in the signal: no D-Bus read needed.
+                if let Ok(args) = sig.args() {
+                    on_icon_theme_path_changed(&inner, &id, args.icon_theme_path().clone()).await;
+                }
+            }
             else => break,
         }
     }
@@ -1200,6 +1330,13 @@ async fn on_icon_changed(
         });
         (resolved, pixmaps)
     };
+    // `NewIcon` also announces a new `IconThemePath` (KDE has no separate
+    // signal for it).
+    let theme_path = if attention {
+        None
+    } else {
+        Some(proxy.icon_theme_path().await.unwrap_or_default())
+    };
     let new_icon = IconData {
         name: icon_name,
         pixmaps: pixmaps_from_dbus(raw),
@@ -1213,6 +1350,9 @@ async fn on_icon_changed(
             } else {
                 item.icon = new_icon;
             }
+            if let Some(path) = theme_path {
+                item.icon_theme_path = path;
+            }
             item.clone()
         });
         maybe_item.map(HostEvent::ItemChanged)
@@ -1220,6 +1360,21 @@ async fn on_icon_changed(
     if let Some(e) = event {
         let _ = inner.events_tx.send(e);
         debug!(%id, attention, "icon updated");
+    }
+}
+
+/// Store a new `IconThemePath` sent with `NewIconThemePath`.
+async fn on_icon_theme_path_changed(inner: &Arc<TrayHostInner>, id: &ItemId, path: String) {
+    let event = {
+        let mut state = inner.state.write().await;
+        state.items.get_mut(id).map(|item| {
+            item.icon_theme_path = path;
+            HostEvent::ItemChanged(item.clone())
+        })
+    };
+    if let Some(e) = event {
+        let _ = inner.events_tx.send(e);
+        debug!(%id, "icon theme path updated");
     }
 }
 

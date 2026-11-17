@@ -27,7 +27,10 @@ Every request is a JSON object on one line:
 | `get_items`  | —                                             | one-shot consumers, scripts       |
 | `get_menu`   | `"app_id": string`, `"submenu_id": int\|null` | menu consumers                    |
 | `activate`   | `"app_id": string`, `"item_id": int`          | menu consumers                    |
-| `get_pixmap` | `"app_id": string`, `"size": int`             | icon-rendering consumers          |
+| `get_pixmap` | `"app_id": string`, `"size": int`, `"icon": "normal"\|"overlay"` (optional, `"normal"`) | icon-rendering consumers          |
+| `secondary_activate` | `"app_id": string`, `"x": int`, `"y": int` (both optional, `0`) | bars (middle click) |
+| `scroll`     | `"app_id": string`, `"delta": int`, `"orientation": "vertical"\|"horizontal"` (optional, `"vertical"`) | bars (wheel) |
+| `context_menu` | `"app_id": string`, `"x": int`, `"y": int` (both optional, `0`) | bars, for items without a DBusMenu |
 
 ---
 
@@ -45,7 +48,7 @@ Every request is a JSON object on one line:
 | `items`  | `"items": MinimalTrayItem[]`                                                         | `get_items`          |
 | `event`  | `"event": TrayEvent`                                                                 | `subscribe` (stream) |
 | `menu`   | `"app_id": string`, `"items": MenuItem[]`                                            | `get_menu`           |
-| `ack`    | —                                                                                    | `activate`           |
+| `ack`    | —                                                                                    | `activate`, `secondary_activate`, `scroll`, `context_menu` |
 | `pixmap` | `"app_id": string`, `"size": int`, `"width": int`, `"height": int`, `"data": string` | `get_pixmap`         |
 
 ### Error
@@ -79,8 +82,8 @@ Every request is a JSON object on one line:
 }
 ```
 
-`title`, `icon_handle`, `category`, `tooltip_title`, `tooltip_description`, and `overlay_icon_handle` are omitted when absent.
-`item_is_menu` is omitted when `false`.
+`title`, `icon_handle`, `category`, `tooltip_title`, `tooltip_description`, `overlay_icon_handle` and `icon_theme_path` are omitted when absent.
+`item_is_menu`, `has_pixmap` and `overlay_has_pixmap` are omitted when `false`.
 
 | Field                 | Type             | Notes                                                                                     |
 | --------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
@@ -93,6 +96,9 @@ Every request is a JSON object on one line:
 | `tooltip_title`       | string \| absent | tooltip title text                                                                        |
 | `tooltip_description` | string \| absent | tooltip description text                                                                  |
 | `overlay_icon_handle` | string \| absent | overlay icon theme name (badge shown on top of the normal icon)                           |
+| `has_pixmap`          | bool \| absent   | `true` when `get_pixmap` has a pixmap for the icon (also when `icon_handle` is set: trayd guesses a handle from the bus name for apps that send only pixmaps) |
+| `overlay_has_pixmap`  | bool \| absent   | `true` when `get_pixmap` with `"icon": "overlay"` has a pixmap |
+| `icon_theme_path`     | string \| absent | directory of an icon theme the app ships (SNI `IconThemePath`); `icon_handle` and `overlay_icon_handle` may only resolve there. Whether to search it, and before or after the user's theme, is the consumer's choice |
 
 ### `MenuItem`
 
@@ -108,6 +114,9 @@ Every request is a JSON object on one line:
 | `enabled`    | bool    | omitted when `true`; `false` → show greyed out and don't `activate` it     |
 | `separator`  | bool    | omitted when `false`; `true` → draw a divider (empty `label`)              |
 | `checked`    | bool    | only on check/radio rows: whether the row is on                            |
+| `icon_name`  | string  | omitted when absent; theme icon name for the row                           |
+| `icon_png`   | string  | omitted when absent; the row's icon as base64 PNG (icons over 64 KiB are not sent) |
+| `shortcut`   | string  | omitted when absent; keys joined with `+` (`"Control+S"`), several shortcuts separated by `", "` |
 
 Labels arrive without DBusMenu mnemonic markers (`_Open` is sent as `Open`).
 Hidden rows are never sent.
@@ -122,7 +131,9 @@ Currently only `"kind": "update"` exists; carries the full current item list.
 
 ### `PixmapResponse`
 
-Returned by `get_pixmap`.
+Returned by `get_pixmap`. Without `"icon"`, or with `"icon": "normal"`, it is
+the item's icon (its attention icon while `status` is `NeedsAttention` and it
+has one); with `"icon": "overlay"`, the overlay badge.
 
 ```json
 {
@@ -193,6 +204,19 @@ Golden request/response pairs live under `examples/ipc-examples/*.jsonl` — fir
 
 ```
 {"v":1,"cmd":"activate","app_id":"org.example.App","item_id":1}
+{"v":1,"type":"ack"}
+```
+
+### `secondary_activate`, `scroll`, `context_menu`
+
+These call the SNI methods of the same name on the app. `delta` is passed
+through unchanged; its sign is the direction (KDE sends ±120 per wheel notch).
+`x` and `y` are a screen position hint (the app may show a window or menu
+there). An app without a DBusMenu (`get_menu` answers `NOT_FOUND`) may still
+show its own menu on `context_menu`.
+
+```
+{"v":1,"cmd":"scroll","app_id":"org.example.App","delta":-120}
 {"v":1,"type":"ack"}
 ```
 

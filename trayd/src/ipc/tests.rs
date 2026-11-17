@@ -12,6 +12,7 @@ use super::server::IpcServer;
 /// where the host would compete with the user's tray for the watcher name.
 struct Server {
     bus: std::process::Child,
+    host: libtrayd::TrayHost,
     handle: tokio::task::JoinHandle<()>,
     path: std::path::PathBuf,
 }
@@ -52,12 +53,17 @@ async fn start_server(tag: &str) -> Option<Server> {
     let host = libtrayd::TrayHost::start_on(&address)
         .await
         .expect("start host on the private bus");
-    let server = IpcServer::new(&path, host);
+    let server = IpcServer::new(&path, host.clone());
     let handle = tokio::spawn(async move {
         let _ = server.run().await;
     });
     tokio::time::sleep(Duration::from_millis(20)).await;
-    Some(Server { bus, handle, path })
+    Some(Server {
+        bus,
+        host,
+        handle,
+        path,
+    })
 }
 
 async fn connect(
@@ -157,6 +163,7 @@ async fn get_pixmap_unknown_returns_not_found() {
         &IpcRequest::new(Cmd::GetPixmap {
             app_id: "org.example.App".into(),
             size: 22,
+            icon: Default::default(),
         }),
     )
     .await
@@ -287,6 +294,9 @@ async fn minimal_tray_item_item_is_menu_omitted_when_false() {
         tooltip_title: None,
         tooltip_description: None,
         overlay_icon_handle: None,
+        icon_theme_path: None,
+        has_pixmap: false,
+        overlay_has_pixmap: false,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -312,6 +322,9 @@ async fn minimal_tray_item_item_is_menu_present_when_true() {
         tooltip_title: Some("Menu App Tooltip".into()),
         tooltip_description: Some("A tooltip description".into()),
         overlay_icon_handle: Some("overlay-badge".into()),
+        icon_theme_path: None,
+        has_pixmap: false,
+        overlay_has_pixmap: false,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -428,6 +441,8 @@ fn menu_rows_carry_state_and_plain_rows_keep_their_old_shape() {
         enabled: true,
         visible: true,
         icon_name: String::new(),
+        icon_data: Vec::new(),
+        shortcuts: Vec::new(),
         is_submenu: false,
         is_separator: false,
         toggle_state: None,
@@ -452,4 +467,196 @@ fn menu_rows_carry_state_and_plain_rows_keep_their_old_shape() {
         json(disabled_toggle),
         r#"{"item_id":3,"label":"Mute","is_submenu":false,"enabled":false,"checked":true}"#
     );
+}
+
+#[tokio::test]
+async fn a_subscriber_that_disconnects_is_dropped_without_waiting_for_an_event() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let Some(srv) = start_server("unsub").await else {
+        return;
+    };
+    let wait_count = |n: usize| {
+        let host = srv.host.clone();
+        async move {
+            for _ in 0..3000 {
+                if host.subscriber_count() == n {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!(
+                "subscriber count stayed {} (want {n})",
+                host.subscriber_count()
+            );
+        }
+    };
+
+    let stream = UnixStream::connect(&srv.path).await.unwrap();
+    let (read, mut write) = stream.into_split();
+    write
+        .write_all(b"{\"v\":1,\"cmd\":\"subscribe\"}\n")
+        .await
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(read).read_line(&mut line).await.unwrap();
+    assert!(line.contains("\"type\":\"event\""), "{line}");
+    wait_count(1).await;
+
+    // The tray stays quiet: nothing would make a write fail.
+    drop(write);
+    wait_count(0).await;
+}
+
+#[tokio::test]
+async fn item_methods_on_an_unknown_app_return_not_found() {
+    let Some(srv) = start_server("itemcmds").await else {
+        return;
+    };
+    let lines = raw_exchange(
+        &srv.path,
+        concat!(
+            r#"{"v":1,"cmd":"secondary_activate","app_id":"x.Missing"}"#,
+            "\n",
+            r#"{"v":1,"cmd":"scroll","app_id":"x.Missing","delta":-1}"#,
+            "\n",
+            r#"{"v":1,"cmd":"context_menu","app_id":"x.Missing","x":5,"y":6}"#,
+            "\n",
+        )
+        .as_bytes(),
+    )
+    .await;
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    for line in &lines {
+        assert!(line.contains("NOT_FOUND"), "{line}");
+    }
+}
+
+#[test]
+fn item_method_requests_parse_with_defaults() {
+    use super::protocol::Orientation;
+    let parse = |line: &str| serde_json::from_str::<IpcRequest>(line).unwrap().cmd;
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"secondary_activate","app_id":"a"}"#),
+        Cmd::SecondaryActivate {
+            app_id: "a".into(),
+            x: 0,
+            y: 0
+        }
+    );
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"scroll","app_id":"a","delta":3}"#),
+        Cmd::Scroll {
+            app_id: "a".into(),
+            delta: 3,
+            orientation: Orientation::Vertical
+        }
+    );
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"scroll","app_id":"a","delta":-3,"orientation":"horizontal"}"#),
+        Cmd::Scroll {
+            app_id: "a".into(),
+            delta: -3,
+            orientation: Orientation::Horizontal
+        }
+    );
+    assert_eq!(
+        parse(r#"{"v":1,"cmd":"context_menu","app_id":"a","x":1,"y":2}"#),
+        Cmd::ContextMenu {
+            app_id: "a".into(),
+            x: 1,
+            y: 2
+        }
+    );
+}
+
+#[test]
+fn icon_theme_path_is_sent_only_when_set() {
+    use super::protocol::MinimalTrayItem;
+    let mut item: MinimalTrayItem =
+        serde_json::from_str(r#"{"app_id":"a","status":"Active"}"#).unwrap();
+    assert_eq!(item.icon_theme_path, None);
+    assert!(
+        !serde_json::to_string(&item)
+            .unwrap()
+            .contains("icon_theme_path")
+    );
+    item.icon_theme_path = Some("/opt/app/icons".into());
+    assert!(
+        serde_json::to_string(&item)
+            .unwrap()
+            .contains(r#""icon_theme_path":"/opt/app/icons""#)
+    );
+}
+
+#[test]
+fn get_pixmap_asks_for_the_normal_icon_unless_told_otherwise() {
+    use super::protocol::PixmapIcon;
+    let parse = |line: &str| serde_json::from_str::<IpcRequest>(line).unwrap().cmd;
+    assert!(matches!(
+        parse(r#"{"v":1,"cmd":"get_pixmap","app_id":"a","size":22}"#),
+        Cmd::GetPixmap {
+            icon: PixmapIcon::Normal,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parse(r#"{"v":1,"cmd":"get_pixmap","app_id":"a","size":22,"icon":"overlay"}"#),
+        Cmd::GetPixmap {
+            icon: PixmapIcon::Overlay,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn pixmap_flags_are_sent_only_when_true() {
+    use super::protocol::MinimalTrayItem;
+    let mut item: MinimalTrayItem =
+        serde_json::from_str(r#"{"app_id":"a","status":"Active"}"#).unwrap();
+    assert!(!serde_json::to_string(&item).unwrap().contains("pixmap"));
+    item.has_pixmap = true;
+    item.overlay_has_pixmap = true;
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""has_pixmap":true"#), "{json}");
+    assert!(json.contains(r#""overlay_has_pixmap":true"#), "{json}");
+}
+
+#[test]
+fn menu_rows_carry_icons_and_shortcuts() {
+    use super::server::{MAX_MENU_ICON_BYTES, format_shortcuts, to_menu_item};
+    let mut node = libtrayd::MenuNode {
+        id: 4,
+        label: "Save".into(),
+        enabled: true,
+        visible: true,
+        icon_name: "document-save".into(),
+        icon_data: vec![0x89, b'P', b'N', b'G'],
+        shortcuts: vec![vec!["Control".into(), "S".into()]],
+        is_submenu: false,
+        is_separator: false,
+        toggle_state: None,
+        children: Vec::new(),
+    };
+    let row = to_menu_item(node.clone());
+    assert_eq!(row.icon_name.as_deref(), Some("document-save"));
+    assert_eq!(row.icon_png.as_deref(), Some("iVBORw=="));
+    assert_eq!(row.shortcut.as_deref(), Some("Control+S"));
+
+    node.icon_data = vec![0; MAX_MENU_ICON_BYTES + 1];
+    assert_eq!(
+        to_menu_item(node).icon_png,
+        None,
+        "oversized icons are dropped"
+    );
+
+    assert_eq!(
+        format_shortcuts(&[
+            vec!["Control".into(), "Q".into()],
+            vec![],
+            vec!["F2".into()]
+        ]),
+        Some("Control+Q, F2".into())
+    );
+    assert_eq!(format_shortcuts(&[]), None);
 }

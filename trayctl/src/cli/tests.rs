@@ -61,3 +61,47 @@ fn subscribe_cli_parses() {
     assert!(matches!(cli.command, Command::Subscribe));
     assert!(cli.socket.is_none());
 }
+
+#[test]
+fn item_method_commands_take_the_app_id_last() {
+    // abar's `feed_id` appends the app id to the configured command.
+    let cli = Cli::try_parse_from([
+        "trayctl",
+        "scroll",
+        "--delta",
+        "-120",
+        "--app-id",
+        "org.example.App",
+    ])
+    .expect("parse");
+    assert!(matches!(
+        cli.command,
+        Command::Scroll { delta: -120, horizontal: false, ref app_id } if app_id == "org.example.App"
+    ));
+
+    let cli =
+        Cli::try_parse_from(["trayctl", "secondary-activate", "--app-id", "a"]).expect("parse");
+    assert!(matches!(
+        cli.command,
+        Command::SecondaryActivate { x: 0, y: 0, ref app_id } if app_id == "a"
+    ));
+
+    let cli = Cli::try_parse_from([
+        "trayctl",
+        "context-menu",
+        "--x",
+        "-5",
+        "--y",
+        "7",
+        "--app-id",
+        "a",
+    ])
+    .expect("parse");
+    assert!(matches!(
+        cli.command,
+        Command::ContextMenu { x: -5, y: 7, .. }
+    ));
+
+    let cli = Cli::try_parse_from(["trayctl", "activate", "--app-id", "a"]).expect("parse");
+    assert!(matches!(cli.command, Command::Activate { item_id: 0, .. }));
+}

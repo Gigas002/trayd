@@ -452,7 +452,14 @@ impl App {
                     None => "",
                 };
                 let suffix = if item.is_submenu { " ▶" } else { "" };
-                let row = ListItem::new(format!("{check}{}{suffix}", item.label));
+                let mut spans = vec![Span::raw(format!("{check}{}{suffix}", item.label))];
+                if let Some(shortcut) = &item.shortcut {
+                    spans.push(Span::styled(
+                        format!("  {shortcut}"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                let row = ListItem::new(Line::from(spans));
                 if item.enabled {
                     row
                 } else {

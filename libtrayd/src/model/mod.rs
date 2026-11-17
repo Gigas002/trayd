@@ -69,6 +69,25 @@ impl std::fmt::Display for TrayStatus {
     }
 }
 
+// ─── ScrollOrientation ──────────────────────────────────────────────────────
+
+/// Direction of a [`crate::host::TrayHost::scroll`] request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollOrientation {
+    Vertical,
+    Horizontal,
+}
+
+impl ScrollOrientation {
+    /// The orientation string of the SNI `Scroll` method.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Vertical => "vertical",
+            Self::Horizontal => "horizontal",
+        }
+    }
+}
+
 // ─── Icon types ──────────────────────────────────────────────────────────────
 
 /// A single pixmap surface at a given resolution.
@@ -137,6 +156,11 @@ pub struct MenuNode {
     pub visible: bool,
     /// Icon name if the item carries one.
     pub icon_name: String,
+    /// The row's icon as PNG bytes (DBusMenu `icon-data`); empty when it has
+    /// none.
+    pub icon_data: Vec<u8>,
+    /// Keyboard shortcuts, each a list of key names (`["Control", "S"]`).
+    pub shortcuts: Vec<Vec<String>>,
     /// `true` when this node represents a submenu (children not yet fetched).
     pub is_submenu: bool,
     /// `true` for a separator line (DBusMenu `type` = `"separator"`).
@@ -190,6 +214,10 @@ pub struct TrayItem {
     pub icon: IconData,
     /// Attention icon data — shown when `status == NeedsAttention`.
     pub attention_icon: IconData,
+    /// Directory holding an icon theme the app ships its own icons in
+    /// (SNI `IconThemePath`); `""` when it has none.  Icon names may only
+    /// resolve there.
+    pub icon_theme_path: String,
     /// D-Bus object path for the associated DBusMenu object (`""` if absent).
     pub menu_path: String,
 }

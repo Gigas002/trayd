@@ -1,7 +1,7 @@
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -10,7 +10,7 @@ use libtrayd::{ItemId, PixmapData, TrayHost, TraydError};
 use crate::error::TraydBinError;
 use crate::ipc::codec;
 use crate::ipc::protocol::{
-    Cmd, ErrorCode, IpcResponse, MenuItem, MinimalTrayItem, OkPayload, TrayEvent, V,
+    Cmd, ErrorCode, IpcResponse, MenuItem, MinimalTrayItem, OkPayload, PixmapIcon, TrayEvent, V,
 };
 
 pub struct IpcServer {
@@ -99,6 +99,10 @@ async fn handle_connection(stream: UnixStream, host: TrayHost) {
             continue;
         }
 
+        if req.cmd == Cmd::Subscribe {
+            run_subscribe(&mut write, &mut reader, &host).await;
+            return;
+        }
         if !dispatch(&mut write, &host, req.cmd).await {
             return;
         }
@@ -150,23 +154,21 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
             codec::write_response(write, &resp).await.is_ok()
         }
 
-        Cmd::GetPixmap { app_id, size } => {
+        Cmd::GetPixmap { app_id, size, icon } => {
             let id = ItemId::from(app_id.clone());
             // Sizes beyond u16 can't match anything better than u16::MAX does.
             let wanted = u16::try_from(size).unwrap_or(u16::MAX);
-            let resp = match host.get_pixmap(&id, wanted).await {
+            let pixmap = match icon {
+                PixmapIcon::Normal => host.get_pixmap(&id, wanted).await,
+                PixmapIcon::Overlay => host.get_overlay_pixmap(&id, wanted).await,
+            };
+            let resp = match pixmap {
                 Ok(PixmapData {
                     width,
                     height,
                     data: bytes,
                 }) => {
-                    let enc_len = base64_ng::STANDARD.encoded_len(bytes.len()).unwrap_or(0);
-                    let mut buf = vec![0u8; enc_len];
-                    let n = base64_ng::STANDARD
-                        .encode_slice(&bytes, &mut buf)
-                        .unwrap_or(0);
-                    // SAFETY: base64 output is always ASCII
-                    let data = String::from_utf8(buf[..n].to_vec()).unwrap_or_default();
+                    let data = base64(&bytes);
                     IpcResponse::ok(OkPayload::Pixmap {
                         app_id,
                         size,
@@ -183,10 +185,41 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
             codec::write_response(write, &resp).await.is_ok()
         }
 
-        Cmd::Subscribe => {
-            run_subscribe(write, host).await;
-            false
+        Cmd::SecondaryActivate { app_id, x, y } => {
+            let id = ItemId::from(app_id.clone());
+            let resp = ack_or_error(&app_id, host.secondary_activate(&id, x, y).await);
+            codec::write_response(write, &resp).await.is_ok()
         }
+
+        Cmd::Scroll {
+            app_id,
+            delta,
+            orientation,
+        } => {
+            let id = ItemId::from(app_id.clone());
+            let resp = ack_or_error(&app_id, host.scroll(&id, delta, orientation.into()).await);
+            codec::write_response(write, &resp).await.is_ok()
+        }
+
+        Cmd::ContextMenu { app_id, x, y } => {
+            let id = ItemId::from(app_id.clone());
+            let resp = ack_or_error(&app_id, host.context_menu(&id, x, y).await);
+            codec::write_response(write, &resp).await.is_ok()
+        }
+
+        // Handled by `handle_connection`, which owns the read side.
+        Cmd::Subscribe => false,
+    }
+}
+
+/// `ack`, or the error response for a failed item method call.
+fn ack_or_error(app_id: &str, result: Result<(), TraydError>) -> IpcResponse {
+    match result {
+        Ok(()) => IpcResponse::ok(OkPayload::Ack),
+        Err(TraydError::NotFound(_)) => {
+            IpcResponse::err(ErrorCode::NotFound, format!("{app_id} not found"))
+        }
+        Err(e) => IpcResponse::err(ErrorCode::BusFailed, e.to_string()),
     }
 }
 
@@ -194,7 +227,30 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
 /// for this long before emitting a single snapshot to the subscriber.
 const COALESCE_MS: u64 = 50;
 
-async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost) {
+/// Resolves when the client closes its end (or the read fails).  Anything the
+/// client sends while subscribed is read and ignored.
+async fn closed<R: AsyncRead + Unpin>(read: &mut R) {
+    let mut buf = [0u8; 256];
+    while let Ok(1..) = read.read(&mut buf).await {}
+}
+
+/// Stream tray snapshots to `write` until the client goes away.
+///
+/// The read side is watched too: a client that disconnects is dropped at
+/// once, with its broadcast receiver, instead of at the next tray event,
+/// when writing to it would fail.
+async fn run_subscribe<W, R>(write: &mut W, read: &mut R, host: &TrayHost)
+where
+    W: AsyncWriteExt + Unpin,
+    R: AsyncRead + Unpin,
+{
+    tokio::select! {
+        () = stream_events(write, host) => {}
+        () = closed(read) => tracing::debug!("subscriber disconnected"),
+    }
+}
+
+async fn stream_events<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost) {
     let mut events_rx = host.subscribe();
 
     // Send the initial full snapshot immediately.
@@ -241,7 +297,35 @@ async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost)
     }
 }
 
+fn base64(bytes: &[u8]) -> String {
+    let enc_len = base64_ng::STANDARD.encoded_len(bytes.len()).unwrap_or(0);
+    let mut buf = vec![0u8; enc_len];
+    let n = base64_ng::STANDARD
+        .encode_slice(bytes, &mut buf)
+        .unwrap_or(0);
+    buf.truncate(n);
+    // base64 output is always ASCII.
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+/// Largest row icon passed on: menu icons are small, and an app must not
+/// be able to blow up every `get_menu` reply.
+pub(crate) const MAX_MENU_ICON_BYTES: usize = 64 * 1024;
+
+/// `[["Control", "S"], ["F2"]]` → `"Control+S, F2"`.
+pub(crate) fn format_shortcuts(shortcuts: &[Vec<String>]) -> Option<String> {
+    let text = shortcuts
+        .iter()
+        .filter(|keys| !keys.is_empty())
+        .map(|keys| keys.join("+"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (!text.is_empty()).then_some(text)
+}
+
 pub(crate) fn to_menu_item(node: libtrayd::MenuNode) -> MenuItem {
+    let icon_png = (!node.icon_data.is_empty() && node.icon_data.len() <= MAX_MENU_ICON_BYTES)
+        .then(|| base64(&node.icon_data));
     MenuItem {
         // DBusMenu ids are i32; the cast round-trips through `activate`.
         item_id: node.id as u32,
@@ -250,6 +334,9 @@ pub(crate) fn to_menu_item(node: libtrayd::MenuNode) -> MenuItem {
         enabled: node.enabled,
         separator: node.is_separator,
         checked: node.toggle_state,
+        icon_name: (!node.icon_name.is_empty()).then_some(node.icon_name),
+        icon_png,
+        shortcut: format_shortcuts(&node.shortcuts),
     }
 }
 
@@ -288,6 +375,17 @@ fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
             Some(item.tool_tip.description.clone())
         },
         overlay_icon_handle: item.overlay_icon.as_handle(),
+        icon_theme_path: if item.icon_theme_path.is_empty() {
+            None
+        } else {
+            Some(item.icon_theme_path.clone())
+        },
+        // What `get_pixmap` would serve: the attention pixmaps take over
+        // while the item needs attention and has some.
+        has_pixmap: !item.icon.pixmaps.is_empty()
+            || (item.status == libtrayd::TrayStatus::NeedsAttention
+                && !item.attention_icon.pixmaps.is_empty()),
+        overlay_has_pixmap: !item.overlay_icon.pixmaps.is_empty(),
     }
 }
 

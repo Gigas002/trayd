@@ -41,6 +41,24 @@ Findings and fixes from the audit in [`docs/AUDIT.md`](docs/AUDIT.md).
 - **`trayctl`**: `--dmenu-cmd` runs through `sh -c`.
 - Live tests run on a private `dbus-daemon` and are no longer `#[ignore]`d.
 
+### Audit leftovers
+
+What the audit left open (§8), except XEmbed.
+
+**Breaking (`libtrayd`):** `TrayItem` also gains `icon_theme_path` and `MenuNode` gains `icon_data` and `shortcuts`, so code that builds them with a struct literal must set them. The IPC protocol only gains optional fields and commands: existing clients keep working.
+
+#### Added
+
+- **IPC / `trayctl`**: `secondary_activate`, `scroll` and `context_menu` commands (`trayctl secondary-activate`, `scroll`, `context-menu`, and `activate` for the primary action); `--app-id` may come last, so a bar can append the clicked item's id.
+- **IPC**: items carry `icon_theme_path` (SNI `IconThemePath`, the icon theme an app ships), `has_pixmap` and `overlay_has_pixmap`; `get_pixmap` takes `"icon": "overlay"` for overlay badges.
+- **IPC**: menu rows carry `icon_name`, `icon_png` (base64 PNG, up to 64 KiB) and `shortcut` (`"Control+S"`); `tray-tui` shows shortcuts.
+- **`libtrayd`**: `TrayHost::secondary_activate`, `scroll` (`ScrollOrientation`), `context_menu`, `get_overlay_pixmap` and `subscriber_count`; `IconThemePath` is read at registration, on `NewIcon` and from `NewIconThemePath`.
+
+#### Fixed
+
+- **`trayd`**: a `subscribe` client that disconnected was only dropped at the next tray event; it is now dropped at once.
+- **`libtrayd`**: `RegisterStatusNotifierHost`'s argument was introspected as `_service`.
+
 ## [0.2.0] - 2026-09-04
 
 ### Fixed

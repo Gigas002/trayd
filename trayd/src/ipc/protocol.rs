@@ -48,7 +48,63 @@ pub enum Cmd {
     GetPixmap {
         app_id: String,
         size: u32,
+        /// Which icon: the normal one (default) or the overlay.
+        #[serde(default)]
+        icon: PixmapIcon,
     },
+    /// SNI `SecondaryActivate` (usually a middle click).
+    SecondaryActivate {
+        app_id: String,
+        #[serde(default)]
+        x: i32,
+        #[serde(default)]
+        y: i32,
+    },
+    /// SNI `Scroll`: `delta` steps (sign is the direction) in `orientation`.
+    Scroll {
+        app_id: String,
+        delta: i32,
+        #[serde(default)]
+        orientation: Orientation,
+    },
+    /// SNI `ContextMenu`: the app shows its own menu, for items without a
+    /// DBusMenu.
+    ContextMenu {
+        app_id: String,
+        #[serde(default)]
+        x: i32,
+        #[serde(default)]
+        y: i32,
+    },
+}
+
+/// Which icon of an item [`Cmd::GetPixmap`] asks for.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixmapIcon {
+    /// The normal icon, or the attention icon while the item needs attention.
+    #[default]
+    Normal,
+    /// The overlay (badge) icon.
+    Overlay,
+}
+
+/// Scroll direction of [`Cmd::Scroll`].
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    #[default]
+    Vertical,
+    Horizontal,
+}
+
+impl From<Orientation> for libtrayd::ScrollOrientation {
+    fn from(o: Orientation) -> Self {
+        match o {
+            Orientation::Vertical => Self::Vertical,
+            Orientation::Horizontal => Self::Horizontal,
+        }
+    }
 }
 
 /// Daemon → consumer response. Tries `Err` variant first on deserialization.
@@ -160,6 +216,18 @@ pub struct MinimalTrayItem {
     /// Overlay icon theme name, if set (displayed on top of the normal icon).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay_icon_handle: Option<String>,
+    /// Icon theme directory the app ships its own icons in, if any; icon
+    /// handles may only resolve there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_theme_path: Option<String>,
+    /// `true` when `get_pixmap` has a pixmap for the icon. Omitted when
+    /// `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_pixmap: bool,
+    /// `true` when `get_pixmap` with `"icon": "overlay"` has a pixmap.
+    /// Omitted when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overlay_has_pixmap: bool,
 }
 
 /// One row in a DBusMenu tree.
@@ -179,6 +247,16 @@ pub struct MenuItem {
     /// On/off state of check and radio rows; absent for plain rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
+    /// Theme icon name of the row, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_name: Option<String>,
+    /// The row's icon as base64-encoded PNG, if the app sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_png: Option<String>,
+    /// Keyboard shortcut, keys joined with `+` (`"Control+S"`); several are
+    /// separated by `", "`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
 }
 
 /// Events pushed to `subscribe` consumers.

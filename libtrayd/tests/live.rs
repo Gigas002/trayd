@@ -2,8 +2,8 @@
 
 mod common;
 
-use common::{FakeApp, FakeState, wait_for};
-use libtrayd::ItemId;
+use common::{FakeApp, FakeState, Prop, Row, wait_for};
+use libtrayd::{ItemId, ScrollOrientation, TraydError};
 
 #[tokio::test]
 async fn registered_item_is_listed_with_its_properties() {
@@ -313,7 +313,6 @@ async fn a_burst_of_change_signals_neither_freezes_nor_floods_the_host() {
 
 #[tokio::test]
 async fn menus_report_what_a_user_sees() {
-    use common::{Prop, Row};
     let bus = test_bus!();
     let host = bus.host().await;
     let app = FakeApp::new(
@@ -373,4 +372,181 @@ async fn menus_report_what_a_user_sees() {
     let labels: Vec<_> = sub.iter().map(|n| n.label.as_str()).collect();
     assert_eq!(labels, ["Inner"]);
     assert!(app.state.lock().unwrap().about_to_show.contains(&6));
+}
+
+#[tokio::test]
+async fn watcher_introspection_names_every_argument() {
+    let bus = test_bus!();
+    let _host = bus.host().await;
+    let conn = bus.connect().await;
+    let reply = conn
+        .call_method(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            Some("org.freedesktop.DBus.Introspectable"),
+            "Introspect",
+            &(),
+        )
+        .await
+        .unwrap();
+    let xml: String = reply.body().deserialize().unwrap();
+    let host_method = xml
+        .split("<method ")
+        .find(|m| m.starts_with("name=\"RegisterStatusNotifierHost\""))
+        .expect("RegisterStatusNotifierHost is introspectable");
+    assert!(host_method.contains("name=\"service\""), "{host_method}");
+    assert!(!xml.contains("name=\"_"), "{xml}");
+}
+
+#[tokio::test]
+async fn secondary_activation_scroll_and_context_menu_reach_the_app() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    host.secondary_activate(&id, 10, 20).await.unwrap();
+    host.scroll(&id, -120, ScrollOrientation::Vertical)
+        .await
+        .unwrap();
+    host.scroll(&id, 1, ScrollOrientation::Horizontal)
+        .await
+        .unwrap();
+    host.context_menu(&id, 30, 40).await.unwrap();
+
+    let s = app.state.lock().unwrap();
+    assert_eq!(s.secondary_activations, vec![(10, 20)]);
+    assert_eq!(
+        s.scrolls,
+        vec![(-120, "vertical".to_owned()), (1, "horizontal".to_owned())]
+    );
+    assert_eq!(s.context_menus, vec![(30, 40)]);
+    assert!(s.activations.is_empty());
+}
+
+#[tokio::test]
+async fn item_methods_on_an_unknown_item_are_not_found() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let id = ItemId::from("org.example.Missing");
+    assert!(matches!(
+        host.secondary_activate(&id, 0, 0).await,
+        Err(TraydError::NotFound(_))
+    ));
+    assert!(matches!(
+        host.scroll(&id, 1, ScrollOrientation::Vertical).await,
+        Err(TraydError::NotFound(_))
+    ));
+    assert!(matches!(
+        host.context_menu(&id, 0, 0).await,
+        Err(TraydError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn icon_theme_path_is_read_and_kept_up_to_date() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let state = FakeState {
+        icon_theme_path: "/opt/fake/icons".into(),
+        ..FakeState::default()
+    };
+    let app = FakeApp::new(&bus, state).await;
+    app.register_as("org.example.Fake").await;
+    wait_for(&host, "theme path read at registration", |i| {
+        i.len() == 1 && i[0].icon_theme_path == "/opt/fake/icons"
+    })
+    .await;
+
+    // libappindicator announces it with NewIconThemePath(path)...
+    app.set_icon_theme_path("/opt/fake/icons2").await;
+    wait_for(&host, "theme path from NewIconThemePath", |i| {
+        i[0].icon_theme_path == "/opt/fake/icons2"
+    })
+    .await;
+
+    // ...KDE apps with NewIcon.
+    app.state.lock().unwrap().icon_theme_path = "/opt/fake/icons3".into();
+    app.emit_new_icon().await;
+    wait_for(&host, "theme path re-read on NewIcon", |i| {
+        i[0].icon_theme_path == "/opt/fake/icons3"
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn apps_without_an_icon_theme_path_have_an_empty_one() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    let items = wait_for(&host, "item listed", |i| i.len() == 1).await;
+    assert_eq!(items[0].icon_theme_path, "");
+}
+
+#[tokio::test]
+async fn overlay_pixmaps_are_served_apart_from_the_icon() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let pixmap = |n: i32, byte: u8| (n, n, vec![byte; (n * n * 4) as usize]);
+    let state = FakeState {
+        pixmaps: vec![pixmap(22, 1)],
+        overlay_pixmaps: vec![pixmap(8, 2), pixmap(16, 3)],
+        ..FakeState::default()
+    };
+    let app = FakeApp::new(&bus, state).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    let icon = host.get_pixmap(&id, 22).await.unwrap();
+    assert_eq!((icon.width, icon.data[0]), (22, 1));
+    let overlay = host.get_overlay_pixmap(&id, 14).await.unwrap();
+    assert_eq!((overlay.width, overlay.data[0]), (16, 3));
+}
+
+#[tokio::test]
+async fn an_item_without_an_overlay_pixmap_says_so() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+    assert!(matches!(
+        host.get_overlay_pixmap(&id, 16).await,
+        Err(TraydError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn menu_rows_carry_their_icons_and_shortcuts() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let state = FakeState {
+        menu: vec![
+            Row::label(1, "Save")
+                .with("icon-name", Prop::Str("document-save"))
+                .with("icon-data", Prop::Bytes(vec![0x89, b'P', b'N', b'G']))
+                .with("shortcut", Prop::Keys(vec![vec!["Control", "S"]])),
+            Row::label(2, "Quit"),
+        ],
+        ..FakeState::default()
+    };
+    let app = FakeApp::new(&bus, state).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    let menu = host.get_menu(&id, None).await.unwrap();
+    assert_eq!(menu[0].icon_name, "document-save");
+    assert_eq!(menu[0].icon_data, vec![0x89, b'P', b'N', b'G']);
+    assert_eq!(menu[0].shortcuts, vec![vec!["Control", "S"]]);
+    assert!(menu[1].icon_data.is_empty() && menu[1].shortcuts.is_empty());
 }

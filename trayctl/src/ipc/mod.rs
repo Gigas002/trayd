@@ -33,6 +33,21 @@ enum Cmd {
         item_id: u32,
     },
     GetItems,
+    SecondaryActivate {
+        app_id: String,
+        x: i32,
+        y: i32,
+    },
+    Scroll {
+        app_id: String,
+        delta: i32,
+        orientation: &'static str,
+    },
+    ContextMenu {
+        app_id: String,
+        x: i32,
+        y: i32,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +144,19 @@ pub struct MinimalTrayItem {
     /// Overlay icon theme name, if set (displayed on top of the normal icon).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay_icon_handle: Option<String>,
+    /// Icon theme directory the app ships its own icons in, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_theme_path: Option<String>,
+    /// `get_pixmap` has a pixmap for the icon.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_pixmap: bool,
+    /// `get_pixmap` with `"icon": "overlay"` has a pixmap.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overlay_has_pixmap: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 // ---------------------------------------------------------------------------
@@ -179,14 +207,56 @@ impl IpcClient {
     }
 
     pub async fn activate(&mut self, app_id: &str, item_id: u32) -> Result<(), CtlError> {
-        let req = Request {
-            v: 1,
-            cmd: Cmd::Activate {
-                app_id: app_id.to_owned(),
-                item_id,
-            },
-        };
-        self.send(&req).await?;
+        self.call_ack(Cmd::Activate {
+            app_id: app_id.to_owned(),
+            item_id,
+        })
+        .await
+    }
+
+    /// SNI `SecondaryActivate` at `(x, y)`.
+    pub async fn secondary_activate(
+        &mut self,
+        app_id: &str,
+        x: i32,
+        y: i32,
+    ) -> Result<(), CtlError> {
+        self.call_ack(Cmd::SecondaryActivate {
+            app_id: app_id.to_owned(),
+            x,
+            y,
+        })
+        .await
+    }
+
+    /// SNI `Scroll` by `delta`, horizontally or vertically.
+    pub async fn scroll(
+        &mut self,
+        app_id: &str,
+        delta: i32,
+        horizontal: bool,
+    ) -> Result<(), CtlError> {
+        self.call_ack(Cmd::Scroll {
+            app_id: app_id.to_owned(),
+            delta,
+            orientation: if horizontal { "horizontal" } else { "vertical" },
+        })
+        .await
+    }
+
+    /// SNI `ContextMenu` at `(x, y)`.
+    pub async fn context_menu(&mut self, app_id: &str, x: i32, y: i32) -> Result<(), CtlError> {
+        self.call_ack(Cmd::ContextMenu {
+            app_id: app_id.to_owned(),
+            x,
+            y,
+        })
+        .await
+    }
+
+    /// Send `cmd` and expect an `ack`.
+    async fn call_ack(&mut self, cmd: Cmd) -> Result<(), CtlError> {
+        self.send(&Request { v: 1, cmd }).await?;
         match self.recv().await? {
             Response::Ok(OkResponse {
                 payload: Payload::Ack,

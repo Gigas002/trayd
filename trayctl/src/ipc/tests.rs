@@ -128,3 +128,32 @@ fn event_response_deserializes() {
         Response::Err(e) => panic!("expected Ok, got error: {:?}", e.error),
     }
 }
+
+#[test]
+fn item_method_requests_serialize() {
+    let line = |cmd| serde_json::to_string(&Request { v: 1, cmd }).unwrap();
+    assert_eq!(
+        line(Cmd::Scroll {
+            app_id: "a".into(),
+            delta: -1,
+            orientation: "vertical"
+        }),
+        r#"{"v":1,"cmd":"scroll","app_id":"a","delta":-1,"orientation":"vertical"}"#
+    );
+    assert_eq!(
+        line(Cmd::SecondaryActivate {
+            app_id: "a".into(),
+            x: 1,
+            y: 2
+        }),
+        r#"{"v":1,"cmd":"secondary_activate","app_id":"a","x":1,"y":2}"#
+    );
+    assert_eq!(
+        line(Cmd::ContextMenu {
+            app_id: "a".into(),
+            x: 3,
+            y: 4
+        }),
+        r#"{"v":1,"cmd":"context_menu","app_id":"a","x":3,"y":4}"#
+    );
+}

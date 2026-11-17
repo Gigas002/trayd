@@ -84,6 +84,11 @@ pub trait StatusNotifierItem {
     #[zbus(property)]
     fn attention_icon_pixmap(&self) -> zbus::Result<Vec<(i32, i32, Vec<u8>)>>;
 
+    /// Extra icon-theme directory the app ships its icons in (optional;
+    /// `""` or absent for most apps).
+    #[zbus(property)]
+    fn icon_theme_path(&self) -> zbus::Result<String>;
+
     /// D-Bus object path for the associated `com.canonical.dbusmenu` object.
     ///
     /// Returns `"/"` when the item has no menu.
@@ -115,6 +120,10 @@ pub trait StatusNotifierItem {
     /// Emitted when the associated `Menu` object path changes.
     #[zbus(signal)]
     async fn new_menu(&self) -> zbus::Result<()>;
+
+    /// Emitted by libappindicator/Ayatana apps when `IconThemePath` changes.
+    #[zbus(signal)]
+    async fn new_icon_theme_path(&self, icon_theme_path: String) -> zbus::Result<()>;
 
     /// Emitted when the tooltip changes.
     #[zbus(signal)]

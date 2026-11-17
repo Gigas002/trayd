@@ -140,6 +140,20 @@ trayctl                 trayd (IPC)             dmenu tool
 
 Press Esc or leave the picker empty at any level to cancel without activating.
 
+### 4a. Click, middle-click and scroll from a bar
+
+```sh
+trayctl activate --app-id <app_id>                  # primary action (usually: show the window)
+trayctl secondary-activate --app-id <app_id>        # middle click
+trayctl scroll --delta 120 --app-id <app_id>        # wheel down (KDE sends ±120 per notch)
+trayctl scroll --delta -120 --horizontal --app-id <app_id>
+trayctl context-menu --app-id <app_id>              # the app's own menu, for apps without a DBusMenu
+```
+
+`--app-id` can come last, so a bar that appends the clicked item's id to a
+command (abar's `feed_id = true`) can bind these directly, e.g.
+`on_middle_click = "trayctl secondary-activate --app-id"`.
+
 ### 5. Browse the tray in a terminal (tray-tui)
 
 ```sh
