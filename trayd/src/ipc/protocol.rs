@@ -48,6 +48,9 @@ pub enum Cmd {
     GetPixmap {
         app_id: String,
         size: u32,
+        /// Which icon: the normal one (default) or the overlay.
+        #[serde(default)]
+        icon: PixmapIcon,
     },
     /// SNI `SecondaryActivate` (usually a middle click).
     SecondaryActivate {
@@ -73,6 +76,17 @@ pub enum Cmd {
         #[serde(default)]
         y: i32,
     },
+}
+
+/// Which icon of an item [`Cmd::GetPixmap`] asks for.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixmapIcon {
+    /// The normal icon, or the attention icon while the item needs attention.
+    #[default]
+    Normal,
+    /// The overlay (badge) icon.
+    Overlay,
 }
 
 /// Scroll direction of [`Cmd::Scroll`].
@@ -206,6 +220,14 @@ pub struct MinimalTrayItem {
     /// handles may only resolve there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme_path: Option<String>,
+    /// `true` when `get_pixmap` has a pixmap for the icon. Omitted when
+    /// `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_pixmap: bool,
+    /// `true` when `get_pixmap` with `"icon": "overlay"` has a pixmap.
+    /// Omitted when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overlay_has_pixmap: bool,
 }
 
 /// One row in a DBusMenu tree.

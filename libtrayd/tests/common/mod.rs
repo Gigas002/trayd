@@ -154,6 +154,7 @@ pub struct FakeState {
     pub icon_name: String,
     pub icon_theme_path: String,
     pub pixmaps: Vec<(i32, i32, Vec<u8>)>,
+    pub overlay_pixmaps: Vec<(i32, i32, Vec<u8>)>,
     pub item_is_menu: bool,
     pub menu: Vec<Row>,
     /// Submenus with an id listed here stay empty until `AboutToShow(id)`.
@@ -179,6 +180,7 @@ impl Default for FakeState {
             icon_name: "fake-icon".into(),
             icon_theme_path: String::new(),
             pixmaps: Vec::new(),
+            overlay_pixmaps: Vec::new(),
             item_is_menu: false,
             menu: vec![Row::label(1, "Open"), Row::label(2, "Quit")],
             lazy_submenus: Vec::new(),
@@ -264,6 +266,10 @@ impl FakeItem {
     #[zbus(property)]
     async fn icon_pixmap(&self) -> Vec<(i32, i32, Vec<u8>)> {
         self.read(|s| s.pixmaps.clone()).await
+    }
+    #[zbus(property)]
+    async fn overlay_icon_pixmap(&self) -> Vec<(i32, i32, Vec<u8>)> {
+        self.read(|s| s.overlay_pixmaps.clone()).await
     }
     #[zbus(property)]
     async fn item_is_menu(&self) -> bool {

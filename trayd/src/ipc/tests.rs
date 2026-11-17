@@ -163,6 +163,7 @@ async fn get_pixmap_unknown_returns_not_found() {
         &IpcRequest::new(Cmd::GetPixmap {
             app_id: "org.example.App".into(),
             size: 22,
+            icon: Default::default(),
         }),
     )
     .await
@@ -294,6 +295,8 @@ async fn minimal_tray_item_item_is_menu_omitted_when_false() {
         tooltip_description: None,
         overlay_icon_handle: None,
         icon_theme_path: None,
+        has_pixmap: false,
+        overlay_has_pixmap: false,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -320,6 +323,8 @@ async fn minimal_tray_item_item_is_menu_present_when_true() {
         tooltip_description: Some("A tooltip description".into()),
         overlay_icon_handle: Some("overlay-badge".into()),
         icon_theme_path: None,
+        has_pixmap: false,
+        overlay_has_pixmap: false,
     };
     let json = serde_json::to_string(&item).unwrap();
     assert!(
@@ -580,4 +585,37 @@ fn icon_theme_path_is_sent_only_when_set() {
             .unwrap()
             .contains(r#""icon_theme_path":"/opt/app/icons""#)
     );
+}
+
+#[test]
+fn get_pixmap_asks_for_the_normal_icon_unless_told_otherwise() {
+    use super::protocol::PixmapIcon;
+    let parse = |line: &str| serde_json::from_str::<IpcRequest>(line).unwrap().cmd;
+    assert!(matches!(
+        parse(r#"{"v":1,"cmd":"get_pixmap","app_id":"a","size":22}"#),
+        Cmd::GetPixmap {
+            icon: PixmapIcon::Normal,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parse(r#"{"v":1,"cmd":"get_pixmap","app_id":"a","size":22,"icon":"overlay"}"#),
+        Cmd::GetPixmap {
+            icon: PixmapIcon::Overlay,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn pixmap_flags_are_sent_only_when_true() {
+    use super::protocol::MinimalTrayItem;
+    let mut item: MinimalTrayItem =
+        serde_json::from_str(r#"{"app_id":"a","status":"Active"}"#).unwrap();
+    assert!(!serde_json::to_string(&item).unwrap().contains("pixmap"));
+    item.has_pixmap = true;
+    item.overlay_has_pixmap = true;
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains(r#""has_pixmap":true"#), "{json}");
+    assert!(json.contains(r#""overlay_has_pixmap":true"#), "{json}");
 }

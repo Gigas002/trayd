@@ -248,24 +248,29 @@ impl TrayHost {
             &item.icon
         };
 
-        if icon.pixmaps.is_empty() {
-            return Err(TraydError::NotFound(format!("no pixmap for {id}")));
-        }
+        nearest_pixmap(icon, size)
+            .ok_or_else(|| TraydError::NotFound(format!("no pixmap for {id}")))
+    }
 
-        // Pick the nearest width; on a tie prefer the larger pixmap, which
-        // scales down better than a small one scales up.
-        let best = icon
-            .pixmaps
-            .iter()
-            .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))
-            .expect("pixmaps is non-empty");
-
-        // `pixmaps_from_dbus` guarantees positive dimensions.
-        Ok(PixmapData {
-            width: best.width.unsigned_abs(),
-            height: best.height.unsigned_abs(),
-            data: best.data.clone(),
-        })
+    /// Like [`TrayHost::get_pixmap`], for the overlay icon (a badge drawn
+    /// over the normal icon).
+    ///
+    /// # Errors
+    ///
+    /// - [`TraydError::NotFound`] if the item or its overlay pixmap data is
+    ///   absent.
+    pub async fn get_overlay_pixmap(
+        &self,
+        id: &ItemId,
+        size: u16,
+    ) -> Result<PixmapData, TraydError> {
+        let state = self.inner.state.read().await;
+        let item = state
+            .items
+            .get(id)
+            .ok_or_else(|| TraydError::NotFound(id.to_string()))?;
+        nearest_pixmap(&item.overlay_icon, size)
+            .ok_or_else(|| TraydError::NotFound(format!("no overlay pixmap for {id}")))
     }
 
     /// Activate a tray item.
@@ -448,6 +453,22 @@ impl TrayHost {
 }
 
 // ─── Proxy helpers ───────────────────────────────────────────────────────────
+
+/// The pixmap of `icon` closest to `size` wide; on a tie the larger one,
+/// which scales down better than a small one scales up.  `None` without
+/// pixmaps.
+pub(crate) fn nearest_pixmap(icon: &IconData, size: u16) -> Option<PixmapData> {
+    let best = icon
+        .pixmaps
+        .iter()
+        .min_by_key(|p| (p.width.abs_diff(i32::from(size)), p.width < i32::from(size)))?;
+    // `pixmaps_from_dbus` guarantees positive dimensions.
+    Some(PixmapData {
+        width: best.width.unsigned_abs(),
+        height: best.height.unsigned_abs(),
+        data: best.data.clone(),
+    })
+}
 
 fn activation_failed(id: &ItemId, e: zbus::Error) -> TraydError {
     TraydError::ActivationFailed {

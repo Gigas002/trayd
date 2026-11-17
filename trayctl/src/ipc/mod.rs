@@ -147,6 +147,16 @@ pub struct MinimalTrayItem {
     /// Icon theme directory the app ships its own icons in, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme_path: Option<String>,
+    /// `get_pixmap` has a pixmap for the icon.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_pixmap: bool,
+    /// `get_pixmap` with `"icon": "overlay"` has a pixmap.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overlay_has_pixmap: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 // ---------------------------------------------------------------------------

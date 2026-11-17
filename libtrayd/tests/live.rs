@@ -487,3 +487,40 @@ async fn apps_without_an_icon_theme_path_have_an_empty_one() {
     let items = wait_for(&host, "item listed", |i| i.len() == 1).await;
     assert_eq!(items[0].icon_theme_path, "");
 }
+
+#[tokio::test]
+async fn overlay_pixmaps_are_served_apart_from_the_icon() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let pixmap = |n: i32, byte: u8| (n, n, vec![byte; (n * n * 4) as usize]);
+    let state = FakeState {
+        pixmaps: vec![pixmap(22, 1)],
+        overlay_pixmaps: vec![pixmap(8, 2), pixmap(16, 3)],
+        ..FakeState::default()
+    };
+    let app = FakeApp::new(&bus, state).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    let icon = host.get_pixmap(&id, 22).await.unwrap();
+    assert_eq!((icon.width, icon.data[0]), (22, 1));
+    let overlay = host.get_overlay_pixmap(&id, 14).await.unwrap();
+    assert_eq!((overlay.width, overlay.data[0]), (16, 3));
+}
+
+#[tokio::test]
+async fn an_item_without_an_overlay_pixmap_says_so() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let app = FakeApp::new(&bus, FakeState::default()).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+    assert!(matches!(
+        host.get_overlay_pixmap(&id, 16).await,
+        Err(TraydError::NotFound(_))
+    ));
+}

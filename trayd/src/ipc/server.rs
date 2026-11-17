@@ -10,7 +10,7 @@ use libtrayd::{ItemId, PixmapData, TrayHost, TraydError};
 use crate::error::TraydBinError;
 use crate::ipc::codec;
 use crate::ipc::protocol::{
-    Cmd, ErrorCode, IpcResponse, MenuItem, MinimalTrayItem, OkPayload, TrayEvent, V,
+    Cmd, ErrorCode, IpcResponse, MenuItem, MinimalTrayItem, OkPayload, PixmapIcon, TrayEvent, V,
 };
 
 pub struct IpcServer {
@@ -154,11 +154,15 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
             codec::write_response(write, &resp).await.is_ok()
         }
 
-        Cmd::GetPixmap { app_id, size } => {
+        Cmd::GetPixmap { app_id, size, icon } => {
             let id = ItemId::from(app_id.clone());
             // Sizes beyond u16 can't match anything better than u16::MAX does.
             let wanted = u16::try_from(size).unwrap_or(u16::MAX);
-            let resp = match host.get_pixmap(&id, wanted).await {
+            let pixmap = match icon {
+                PixmapIcon::Normal => host.get_pixmap(&id, wanted).await,
+                PixmapIcon::Overlay => host.get_overlay_pixmap(&id, wanted).await,
+            };
+            let resp = match pixmap {
                 Ok(PixmapData {
                     width,
                     height,
@@ -351,6 +355,12 @@ fn to_minimal(item: &libtrayd::TrayItem) -> MinimalTrayItem {
         } else {
             Some(item.icon_theme_path.clone())
         },
+        // What `get_pixmap` would serve: the attention pixmaps take over
+        // while the item needs attention and has some.
+        has_pixmap: !item.icon.pixmaps.is_empty()
+            || (item.status == libtrayd::TrayStatus::NeedsAttention
+                && !item.attention_icon.pixmaps.is_empty()),
+        overlay_has_pixmap: !item.overlay_icon.pixmaps.is_empty(),
     }
 }
 

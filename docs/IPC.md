@@ -27,7 +27,7 @@ Every request is a JSON object on one line:
 | `get_items`  | —                                             | one-shot consumers, scripts       |
 | `get_menu`   | `"app_id": string`, `"submenu_id": int\|null` | menu consumers                    |
 | `activate`   | `"app_id": string`, `"item_id": int`          | menu consumers                    |
-| `get_pixmap` | `"app_id": string`, `"size": int`             | icon-rendering consumers          |
+| `get_pixmap` | `"app_id": string`, `"size": int`, `"icon": "normal"\|"overlay"` (optional, `"normal"`) | icon-rendering consumers          |
 | `secondary_activate` | `"app_id": string`, `"x": int`, `"y": int` (both optional, `0`) | bars (middle click) |
 | `scroll`     | `"app_id": string`, `"delta": int`, `"orientation": "vertical"\|"horizontal"` (optional, `"vertical"`) | bars (wheel) |
 | `context_menu` | `"app_id": string`, `"x": int`, `"y": int` (both optional, `0`) | bars, for items without a DBusMenu |
@@ -83,7 +83,7 @@ Every request is a JSON object on one line:
 ```
 
 `title`, `icon_handle`, `category`, `tooltip_title`, `tooltip_description`, `overlay_icon_handle` and `icon_theme_path` are omitted when absent.
-`item_is_menu` is omitted when `false`.
+`item_is_menu`, `has_pixmap` and `overlay_has_pixmap` are omitted when `false`.
 
 | Field                 | Type             | Notes                                                                                     |
 | --------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
@@ -96,6 +96,8 @@ Every request is a JSON object on one line:
 | `tooltip_title`       | string \| absent | tooltip title text                                                                        |
 | `tooltip_description` | string \| absent | tooltip description text                                                                  |
 | `overlay_icon_handle` | string \| absent | overlay icon theme name (badge shown on top of the normal icon)                           |
+| `has_pixmap`          | bool \| absent   | `true` when `get_pixmap` has a pixmap for the icon (also when `icon_handle` is set: trayd guesses a handle from the bus name for apps that send only pixmaps) |
+| `overlay_has_pixmap`  | bool \| absent   | `true` when `get_pixmap` with `"icon": "overlay"` has a pixmap |
 | `icon_theme_path`     | string \| absent | directory of an icon theme the app ships (SNI `IconThemePath`); `icon_handle` and `overlay_icon_handle` may only resolve there. Whether to search it, and before or after the user's theme, is the consumer's choice |
 
 ### `MenuItem`
@@ -126,7 +128,9 @@ Currently only `"kind": "update"` exists; carries the full current item list.
 
 ### `PixmapResponse`
 
-Returned by `get_pixmap`.
+Returned by `get_pixmap`. Without `"icon"`, or with `"icon": "normal"`, it is
+the item's icon (its attention icon while `status` is `NeedsAttention` and it
+has one); with `"icon": "overlay"`, the overlay badge.
 
 ```json
 {
