@@ -94,6 +94,9 @@ pub struct MenuItem {
     /// On/off state of check and radio rows.
     #[serde(default)]
     pub checked: Option<bool>,
+    /// Keyboard shortcut text (`"Control+S"`), if the app gave one.
+    #[serde(default)]
+    pub shortcut: Option<String>,
 }
 
 fn yes() -> bool {

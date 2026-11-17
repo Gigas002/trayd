@@ -441,6 +441,8 @@ fn menu_rows_carry_state_and_plain_rows_keep_their_old_shape() {
         enabled: true,
         visible: true,
         icon_name: String::new(),
+        icon_data: Vec::new(),
+        shortcuts: Vec::new(),
         is_submenu: false,
         is_separator: false,
         toggle_state: None,
@@ -618,4 +620,43 @@ fn pixmap_flags_are_sent_only_when_true() {
     let json = serde_json::to_string(&item).unwrap();
     assert!(json.contains(r#""has_pixmap":true"#), "{json}");
     assert!(json.contains(r#""overlay_has_pixmap":true"#), "{json}");
+}
+
+#[test]
+fn menu_rows_carry_icons_and_shortcuts() {
+    use super::server::{MAX_MENU_ICON_BYTES, format_shortcuts, to_menu_item};
+    let mut node = libtrayd::MenuNode {
+        id: 4,
+        label: "Save".into(),
+        enabled: true,
+        visible: true,
+        icon_name: "document-save".into(),
+        icon_data: vec![0x89, b'P', b'N', b'G'],
+        shortcuts: vec![vec!["Control".into(), "S".into()]],
+        is_submenu: false,
+        is_separator: false,
+        toggle_state: None,
+        children: Vec::new(),
+    };
+    let row = to_menu_item(node.clone());
+    assert_eq!(row.icon_name.as_deref(), Some("document-save"));
+    assert_eq!(row.icon_png.as_deref(), Some("iVBORw=="));
+    assert_eq!(row.shortcut.as_deref(), Some("Control+S"));
+
+    node.icon_data = vec![0; MAX_MENU_ICON_BYTES + 1];
+    assert_eq!(
+        to_menu_item(node).icon_png,
+        None,
+        "oversized icons are dropped"
+    );
+
+    assert_eq!(
+        format_shortcuts(&[
+            vec!["Control".into(), "Q".into()],
+            vec![],
+            vec!["F2".into()]
+        ]),
+        Some("Control+Q, F2".into())
+    );
+    assert_eq!(format_shortcuts(&[]), None);
 }

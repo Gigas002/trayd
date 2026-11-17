@@ -168,13 +168,7 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
                     height,
                     data: bytes,
                 }) => {
-                    let enc_len = base64_ng::STANDARD.encoded_len(bytes.len()).unwrap_or(0);
-                    let mut buf = vec![0u8; enc_len];
-                    let n = base64_ng::STANDARD
-                        .encode_slice(&bytes, &mut buf)
-                        .unwrap_or(0);
-                    // SAFETY: base64 output is always ASCII
-                    let data = String::from_utf8(buf[..n].to_vec()).unwrap_or_default();
+                    let data = base64(&bytes);
                     IpcResponse::ok(OkPayload::Pixmap {
                         app_id,
                         size,
@@ -303,7 +297,35 @@ async fn stream_events<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost)
     }
 }
 
+fn base64(bytes: &[u8]) -> String {
+    let enc_len = base64_ng::STANDARD.encoded_len(bytes.len()).unwrap_or(0);
+    let mut buf = vec![0u8; enc_len];
+    let n = base64_ng::STANDARD
+        .encode_slice(bytes, &mut buf)
+        .unwrap_or(0);
+    buf.truncate(n);
+    // base64 output is always ASCII.
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+/// Largest row icon passed on: menu icons are small, and an app must not
+/// be able to blow up every `get_menu` reply.
+pub(crate) const MAX_MENU_ICON_BYTES: usize = 64 * 1024;
+
+/// `[["Control", "S"], ["F2"]]` → `"Control+S, F2"`.
+pub(crate) fn format_shortcuts(shortcuts: &[Vec<String>]) -> Option<String> {
+    let text = shortcuts
+        .iter()
+        .filter(|keys| !keys.is_empty())
+        .map(|keys| keys.join("+"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (!text.is_empty()).then_some(text)
+}
+
 pub(crate) fn to_menu_item(node: libtrayd::MenuNode) -> MenuItem {
+    let icon_png = (!node.icon_data.is_empty() && node.icon_data.len() <= MAX_MENU_ICON_BYTES)
+        .then(|| base64(&node.icon_data));
     MenuItem {
         // DBusMenu ids are i32; the cast round-trips through `activate`.
         item_id: node.id as u32,
@@ -312,6 +334,9 @@ pub(crate) fn to_menu_item(node: libtrayd::MenuNode) -> MenuItem {
         enabled: node.enabled,
         separator: node.is_separator,
         checked: node.toggle_state,
+        icon_name: (!node.icon_name.is_empty()).then_some(node.icon_name),
+        icon_png,
+        shortcut: format_shortcuts(&node.shortcuts),
     }
 }
 

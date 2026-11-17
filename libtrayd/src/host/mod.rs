@@ -564,6 +564,14 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
     let enabled = get_bool_prop(&props, "enabled").unwrap_or(true);
     let visible = get_bool_prop(&props, "visible").unwrap_or(true);
     let icon_name = get_str_prop(&props, "icon-name");
+    let icon_data = props
+        .get("icon-data")
+        .and_then(|v| Vec::<u8>::try_from(v.clone()).ok())
+        .unwrap_or_default();
+    let shortcuts = props
+        .get("shortcut")
+        .and_then(|v| Vec::<Vec<String>>::try_from(v.clone()).ok())
+        .unwrap_or_default();
     // A submenu is indicated by `children-display` in props, or non-empty children
     // (the latter occurs when GetLayout was called with depth > 1).
     let is_submenu = props.contains_key("children-display") || !nested_children.is_empty();
@@ -585,6 +593,8 @@ fn parse_child_ov(ov: OwnedVariant) -> Option<MenuNode> {
         enabled,
         visible,
         icon_name,
+        icon_data,
+        shortcuts,
         is_submenu,
         is_separator,
         toggle_state,

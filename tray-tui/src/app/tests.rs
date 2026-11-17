@@ -23,6 +23,7 @@ fn make_menu_item(id: u32, label: &str, is_submenu: bool) -> MenuItem {
         enabled: true,
         separator: false,
         checked: None,
+        shortcut: None,
     }
 }
 
@@ -406,4 +407,18 @@ fn menu_shows_title_toggles_and_separators() {
     assert!(screen.contains("[x] Wi-Fi"), "{screen}");
     assert!(screen.contains("───"), "{screen}");
     assert!(screen.contains("VPN ▶"), "{screen}");
+}
+
+#[test]
+fn menu_rows_show_their_shortcut() {
+    let app = menu_app(vec![MenuItem {
+        shortcut: Some("Control+S".into()),
+        ..make_menu_item(1, "Save", false)
+    }]);
+    let screen = render(&app);
+    let row = screen
+        .lines()
+        .find(|l| l.contains("Save"))
+        .expect("row drawn");
+    assert!(row.contains("Save  Control+S"), "{screen}");
 }

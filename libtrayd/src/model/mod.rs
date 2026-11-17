@@ -156,6 +156,11 @@ pub struct MenuNode {
     pub visible: bool,
     /// Icon name if the item carries one.
     pub icon_name: String,
+    /// The row's icon as PNG bytes (DBusMenu `icon-data`); empty when it has
+    /// none.
+    pub icon_data: Vec<u8>,
+    /// Keyboard shortcuts, each a list of key names (`["Control", "S"]`).
+    pub shortcuts: Vec<Vec<String>>,
     /// `true` when this node represents a submenu (children not yet fetched).
     pub is_submenu: bool,
     /// `true` for a separator line (DBusMenu `type` = `"separator"`).

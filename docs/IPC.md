@@ -114,6 +114,9 @@ Every request is a JSON object on one line:
 | `enabled`    | bool    | omitted when `true`; `false` → show greyed out and don't `activate` it     |
 | `separator`  | bool    | omitted when `false`; `true` → draw a divider (empty `label`)              |
 | `checked`    | bool    | only on check/radio rows: whether the row is on                            |
+| `icon_name`  | string  | omitted when absent; theme icon name for the row                           |
+| `icon_png`   | string  | omitted when absent; the row's icon as base64 PNG (icons over 64 KiB are not sent) |
+| `shortcut`   | string  | omitted when absent; keys joined with `+` (`"Control+S"`), several shortcuts separated by `", "` |
 
 Labels arrive without DBusMenu mnemonic markers (`_Open` is sent as `Open`).
 Hidden rows are never sent.

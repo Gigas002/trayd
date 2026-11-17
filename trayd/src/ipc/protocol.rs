@@ -247,6 +247,16 @@ pub struct MenuItem {
     /// On/off state of check and radio rows; absent for plain rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
+    /// Theme icon name of the row, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_name: Option<String>,
+    /// The row's icon as base64-encoded PNG, if the app sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_png: Option<String>,
+    /// Keyboard shortcut, keys joined with `+` (`"Control+S"`); several are
+    /// separated by `", "`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
 }
 
 /// Events pushed to `subscribe` consumers.

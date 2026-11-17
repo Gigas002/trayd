@@ -121,6 +121,8 @@ pub enum Prop {
     Str(&'static str),
     Bool(bool),
     Int(i32),
+    Bytes(Vec<u8>),
+    Keys(Vec<Vec<&'static str>>),
 }
 
 impl Row {
@@ -312,6 +314,8 @@ fn row_variant(row: &Row, populate: bool) -> Variant<'static> {
                 Prop::Str(s) => Variant::from(*s),
                 Prop::Bool(b) => Variant::from(*b),
                 Prop::Int(i) => Variant::from(*i),
+                Prop::Bytes(b) => Variant::from(b.clone()),
+                Prop::Keys(k) => Variant::from(k.clone()),
             };
             ((*k).to_owned(), v)
         })

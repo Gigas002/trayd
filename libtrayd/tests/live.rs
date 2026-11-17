@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{FakeApp, FakeState, wait_for};
+use common::{FakeApp, FakeState, Prop, Row, wait_for};
 use libtrayd::{ItemId, ScrollOrientation, TraydError};
 
 #[tokio::test]
@@ -313,7 +313,6 @@ async fn a_burst_of_change_signals_neither_freezes_nor_floods_the_host() {
 
 #[tokio::test]
 async fn menus_report_what_a_user_sees() {
-    use common::{Prop, Row};
     let bus = test_bus!();
     let host = bus.host().await;
     let app = FakeApp::new(
@@ -523,4 +522,31 @@ async fn an_item_without_an_overlay_pixmap_says_so() {
         host.get_overlay_pixmap(&id, 16).await,
         Err(TraydError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn menu_rows_carry_their_icons_and_shortcuts() {
+    let bus = test_bus!();
+    let host = bus.host().await;
+    let state = FakeState {
+        menu: vec![
+            Row::label(1, "Save")
+                .with("icon-name", Prop::Str("document-save"))
+                .with("icon-data", Prop::Bytes(vec![0x89, b'P', b'N', b'G']))
+                .with("shortcut", Prop::Keys(vec![vec!["Control", "S"]])),
+            Row::label(2, "Quit"),
+        ],
+        ..FakeState::default()
+    };
+    let app = FakeApp::new(&bus, state).await;
+    app.register_as("org.example.Fake").await;
+    let id = wait_for(&host, "item listed", |i| i.len() == 1).await[0]
+        .id
+        .clone();
+
+    let menu = host.get_menu(&id, None).await.unwrap();
+    assert_eq!(menu[0].icon_name, "document-save");
+    assert_eq!(menu[0].icon_data, vec![0x89, b'P', b'N', b'G']);
+    assert_eq!(menu[0].shortcuts, vec![vec!["Control", "S"]]);
+    assert!(menu[1].icon_data.is_empty() && menu[1].shortcuts.is_empty());
 }
