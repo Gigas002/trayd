@@ -374,3 +374,27 @@ async fn menus_report_what_a_user_sees() {
     assert_eq!(labels, ["Inner"]);
     assert!(app.state.lock().unwrap().about_to_show.contains(&6));
 }
+
+#[tokio::test]
+async fn watcher_introspection_names_every_argument() {
+    let bus = test_bus!();
+    let _host = bus.host().await;
+    let conn = bus.connect().await;
+    let reply = conn
+        .call_method(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            Some("org.freedesktop.DBus.Introspectable"),
+            "Introspect",
+            &(),
+        )
+        .await
+        .unwrap();
+    let xml: String = reply.body().deserialize().unwrap();
+    let host_method = xml
+        .split("<method ")
+        .find(|m| m.starts_with("name=\"RegisterStatusNotifierHost\""))
+        .expect("RegisterStatusNotifierHost is introspectable");
+    assert!(host_method.contains("name=\"service\""), "{host_method}");
+    assert!(!xml.contains("name=\"_"), "{xml}");
+}

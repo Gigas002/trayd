@@ -134,8 +134,9 @@ impl StatusNotifierWatcher {
     async fn register_status_notifier_host(
         &self,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-        _service: &str,
+        service: &str,
     ) -> zbus::fdo::Result<()> {
+        debug!(service, "host registered");
         Self::status_notifier_host_registered(&emitter)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
