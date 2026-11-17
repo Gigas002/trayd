@@ -205,6 +205,11 @@ impl TrayHost {
         self.inner.events_tx.subscribe()
     }
 
+    /// Number of live [`TrayHost::subscribe`] receivers.
+    pub fn subscriber_count(&self) -> usize {
+        self.inner.events_tx.receiver_count()
+    }
+
     /// Snapshot of all currently cached items, in registration order.
     pub async fn items(&self) -> Vec<TrayItem> {
         self.inner.state.read().await.sorted_items()

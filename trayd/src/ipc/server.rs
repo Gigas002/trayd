@@ -1,7 +1,7 @@
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -99,6 +99,10 @@ async fn handle_connection(stream: UnixStream, host: TrayHost) {
             continue;
         }
 
+        if req.cmd == Cmd::Subscribe {
+            run_subscribe(&mut write, &mut reader, &host).await;
+            return;
+        }
         if !dispatch(&mut write, &host, req.cmd).await {
             return;
         }
@@ -183,10 +187,8 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
             codec::write_response(write, &resp).await.is_ok()
         }
 
-        Cmd::Subscribe => {
-            run_subscribe(write, host).await;
-            false
-        }
+        // Handled by `handle_connection`, which owns the read side.
+        Cmd::Subscribe => false,
     }
 }
 
@@ -194,7 +196,30 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost, cmd:
 /// for this long before emitting a single snapshot to the subscriber.
 const COALESCE_MS: u64 = 50;
 
-async fn run_subscribe<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost) {
+/// Resolves when the client closes its end (or the read fails).  Anything the
+/// client sends while subscribed is read and ignored.
+async fn closed<R: AsyncRead + Unpin>(read: &mut R) {
+    let mut buf = [0u8; 256];
+    while let Ok(1..) = read.read(&mut buf).await {}
+}
+
+/// Stream tray snapshots to `write` until the client goes away.
+///
+/// The read side is watched too: a client that disconnects is dropped at
+/// once, with its broadcast receiver, instead of at the next tray event,
+/// when writing to it would fail.
+async fn run_subscribe<W, R>(write: &mut W, read: &mut R, host: &TrayHost)
+where
+    W: AsyncWriteExt + Unpin,
+    R: AsyncRead + Unpin,
+{
+    tokio::select! {
+        () = stream_events(write, host) => {}
+        () = closed(read) => tracing::debug!("subscriber disconnected"),
+    }
+}
+
+async fn stream_events<W: AsyncWriteExt + Unpin>(write: &mut W, host: &TrayHost) {
     let mut events_rx = host.subscribe();
 
     // Send the initial full snapshot immediately.

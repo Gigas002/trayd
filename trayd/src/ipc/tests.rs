@@ -12,6 +12,7 @@ use super::server::IpcServer;
 /// where the host would compete with the user's tray for the watcher name.
 struct Server {
     bus: std::process::Child,
+    host: libtrayd::TrayHost,
     handle: tokio::task::JoinHandle<()>,
     path: std::path::PathBuf,
 }
@@ -52,12 +53,17 @@ async fn start_server(tag: &str) -> Option<Server> {
     let host = libtrayd::TrayHost::start_on(&address)
         .await
         .expect("start host on the private bus");
-    let server = IpcServer::new(&path, host);
+    let server = IpcServer::new(&path, host.clone());
     let handle = tokio::spawn(async move {
         let _ = server.run().await;
     });
     tokio::time::sleep(Duration::from_millis(20)).await;
-    Some(Server { bus, handle, path })
+    Some(Server {
+        bus,
+        host,
+        handle,
+        path,
+    })
 }
 
 async fn connect(
@@ -452,4 +458,43 @@ fn menu_rows_carry_state_and_plain_rows_keep_their_old_shape() {
         json(disabled_toggle),
         r#"{"item_id":3,"label":"Mute","is_submenu":false,"enabled":false,"checked":true}"#
     );
+}
+
+#[tokio::test]
+async fn a_subscriber_that_disconnects_is_dropped_without_waiting_for_an_event() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let Some(srv) = start_server("unsub").await else {
+        return;
+    };
+    let wait_count = |n: usize| {
+        let host = srv.host.clone();
+        async move {
+            for _ in 0..3000 {
+                if host.subscriber_count() == n {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!(
+                "subscriber count stayed {} (want {n})",
+                host.subscriber_count()
+            );
+        }
+    };
+
+    let stream = UnixStream::connect(&srv.path).await.unwrap();
+    let (read, mut write) = stream.into_split();
+    write
+        .write_all(b"{\"v\":1,\"cmd\":\"subscribe\"}\n")
+        .await
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(read).read_line(&mut line).await.unwrap();
+    assert!(line.contains("\"type\":\"event\""), "{line}");
+    wait_count(1).await;
+
+    // The tray stays quiet: nothing would make a write fail.
+    drop(write);
+    wait_count(0).await;
 }
